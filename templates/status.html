@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>S.I.P.A. · Estado del Sistema</title>
+    <link rel="icon" type="image/png" href="{{ url_for('static', filename='img/logo-tic.png') }}">
+    <style>
+        :root {
+            --bg: #f1f5f9;
+            --card: #ffffff;
+            --azul: #1e6fa8;
+            --verde: #16a34a;
+            --rojo: #dc2626;
+            --amarillo: #f59e0b;
+            --texto: #1c2b3a;
+            --texto-suave: #64748b;
+            --borde: #e2e8f0;
+        }
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg: #0f1822;
+                --card: #1a2536;
+                --texto: #e2e8f0;
+                --texto-suave: #94a3b8;
+                --borde: #2d3a4f;
+            }
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        html, body {
+            background: var(--bg);
+            color: var(--texto);
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            min-height: 100vh;
+            padding: 30px 20px;
+        }
+        .container {
+            max-width: 720px;
+            margin: 0 auto;
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .header h1 {
+            font-size: 1.6em;
+            color: var(--azul);
+            margin-bottom: 6px;
+        }
+        .header p {
+            color: var(--texto-suave);
+            font-size: .92em;
+        }
+        .status-global {
+            background: var(--card);
+            border-radius: 14px;
+            padding: 28px 24px;
+            text-align: center;
+            margin-bottom: 20px;
+            border-left: 6px solid var(--verde);
+            box-shadow: 0 2px 8px rgba(0,0,0,.05);
+        }
+        .status-global.degradado { border-left-color: var(--amarillo); }
+        .status-global.caido     { border-left-color: var(--rojo); }
+        .status-icon { font-size: 3em; margin-bottom: 10px; }
+        .status-titulo { font-size: 1.5em; font-weight: 700; margin-bottom: 6px; }
+        .status-sub {
+            color: var(--texto-suave);
+            font-size: .92em;
+        }
+        .servicios {
+            background: var(--card);
+            border-radius: 14px;
+            padding: 0;
+            margin-bottom: 20px;
+            overflow: hidden;
+            box-shadow: 0 2px 8px rgba(0,0,0,.05);
+        }
+        .servicios h3 {
+            background: var(--borde);
+            padding: 14px 20px;
+            font-size: .82em;
+            text-transform: uppercase;
+            letter-spacing: 1.2px;
+            color: var(--texto-suave);
+            font-weight: 700;
+        }
+        .servicio {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--borde);
+        }
+        .servicio:last-child { border-bottom: none; }
+        .servicio-nombre {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-weight: 600;
+        }
+        .servicio-icon { font-size: 1.4em; }
+        .servicio-estado {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-weight: 700;
+        }
+        .dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+        .dot.up   { background: var(--verde); box-shadow: 0 0 8px rgba(22,163,74,.5); }
+        .dot.down { background: var(--rojo);  box-shadow: 0 0 8px rgba(220,38,38,.5); }
+        .up   { color: var(--verde); }
+        .down { color: var(--rojo); }
+        .metricas {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+        .metrica {
+            background: var(--card);
+            border-radius: 10px;
+            padding: 16px;
+            text-align: center;
+            box-shadow: 0 2px 8px rgba(0,0,0,.04);
+        }
+        .metrica-label {
+            font-size: .72em;
+            color: var(--texto-suave);
+            text-transform: uppercase;
+            letter-spacing: .8px;
+            margin-bottom: 6px;
+        }
+        .metrica-valor {
+            font-size: 1.6em;
+            font-weight: 800;
+            color: var(--azul);
+            font-family: 'Barlow Condensed', sans-serif;
+        }
+        .footer {
+            text-align: center;
+            font-size: .82em;
+            color: var(--texto-suave);
+            margin-top: 30px;
+        }
+        .footer-marca { color: var(--azul); font-weight: 700; }
+        @media (max-width: 540px) {
+            .metricas { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>S.I.P.A. · Estado del Sistema</h1>
+            <p>Sistema Integral de Partes de Aula · Escuela Cbo. R. Cuello · GNA</p>
+        </div>
+
+        <div class="status-global" id="status-global">
+            <div class="status-icon" id="status-icon">⏳</div>
+            <div class="status-titulo" id="status-titulo">Verificando estado...</div>
+            <div class="status-sub" id="status-sub">—</div>
+        </div>
+
+        <div class="servicios">
+            <h3>Servicios</h3>
+            <div class="servicio">
+                <div class="servicio-nombre"><span class="servicio-icon">🌐</span> Web (Flask)</div>
+                <div class="servicio-estado" id="serv-web"><span class="dot up"></span><span class="up">Operativo</span></div>
+            </div>
+            <div class="servicio">
+                <div class="servicio-nombre"><span class="servicio-icon">🗄️</span> Base de Datos</div>
+                <div class="servicio-estado" id="serv-db"><span class="dot up"></span><span class="up">—</span></div>
+            </div>
+            <div class="servicio">
+                <div class="servicio-nombre"><span class="servicio-icon">🤖</span> Bot Telegram</div>
+                <div class="servicio-estado" id="serv-bot"><span class="dot up"></span><span class="up">—</span></div>
+            </div>
+            <div class="servicio">
+                <div class="servicio-nombre"><span class="servicio-icon">⏰</span> Scheduler</div>
+                <div class="servicio-estado" id="serv-sched"><span class="dot up"></span><span class="up">—</span></div>
+            </div>
+        </div>
+
+        <div class="metricas">
+            <div class="metrica">
+                <div class="metrica-label">⏱️ Latencia DB</div>
+                <div class="metrica-valor" id="lat">—</div>
+            </div>
+            <div class="metrica">
+                <div class="metrica-label">⏳ Uptime</div>
+                <div class="metrica-valor" id="up">—</div>
+            </div>
+            <div class="metrica">
+                <div class="metrica-label">🚨 Errores 7d</div>
+                <div class="metrica-valor" id="err">—</div>
+            </div>
+        </div>
+
+        <div class="footer">
+            <span class="footer-marca">S.I.P.A.</span> · Actualizado: <span id="actualizado">—</span><br>
+            🔄 Refresh manual: <a href="javascript:cargarStatus()" style="color:var(--azul);">recargar</a>
+        </div>
+    </div>
+
+    <script>
+        async function cargarStatus() {
+            try {
+                const r = await fetch('/api/status/public');
+                const d = await r.json();
+                const e = d.estado || {};
+                // Servicios
+                const setServ = (id, ok, label) => {
+                    const el = document.getElementById(id);
+                    if (!el) return;
+                    el.innerHTML = `<span class="dot ${ok?'up':'down'}"></span><span class="${ok?'up':'down'}">${label}</span>`;
+                };
+                setServ('serv-web',  e.web,  e.web?'Operativo':'Caído');
+                setServ('serv-db',   e.db,   e.db?'Operativo':'Caído');
+                setServ('serv-bot',  e.bot,  e.bot?'Operativo':'Inactivo');
+                setServ('serv-sched',e.scheduler, e.scheduler?'Operativo':'Inactivo');
+                // Métricas
+                document.getElementById('lat').textContent = d.db_latency_ms != null ? d.db_latency_ms + ' ms' : '—';
+                document.getElementById('up').textContent  = d.uptime || '—';
+                document.getElementById('err').textContent = d.incidentes_7d || 0;
+                // Global
+                const todoOk = e.web && e.db && e.bot && e.scheduler;
+                const algunoDown = !e.db || !e.web;
+                const globalEl = document.getElementById('status-global');
+                globalEl.className = 'status-global ' + (algunoDown ? 'caido' : todoOk ? '' : 'degradado');
+                document.getElementById('status-icon').textContent = todoOk ? '✅' : algunoDown ? '❌' : '⚠️';
+                document.getElementById('status-titulo').textContent = todoOk ? 'Todos los sistemas operativos' :
+                    algunoDown ? 'Sistema con incidentes' : 'Operativo con degradación';
+                document.getElementById('status-sub').textContent =
+                    d.ultima_caida ? `Último incidente: ${d.ultima_caida}` :
+                    todoOk ? 'Sin incidentes en los últimos 7 días.' : '';
+                document.getElementById('actualizado').textContent = new Date().toLocaleTimeString('es-AR');
+            } catch (e) {
+                document.getElementById('status-titulo').textContent = '❌ No se pudo conectar';
+            }
+        }
+        cargarStatus();
+        setInterval(cargarStatus, 30000);
+    </script>
+</body>
+</html>

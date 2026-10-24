@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>S.I.P.A. · Dashboard TV</title>
+    <link rel="icon" type="image/png" href="{{ url_for('static', filename='img/logo-tic.png') }}">
+    <style>
+        :root {
+            --bg-1: #0a1626;
+            --bg-2: #1a2536;
+            --azul: #3b8fc8;
+            --verde: #10b981;
+            --rojo: #ef4444;
+            --amarillo: #f59e0b;
+            --texto: #f1f5f9;
+            --texto-suave: #94a3b8;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        html, body {
+            background: linear-gradient(135deg, var(--bg-1) 0%, #060d18 100%);
+            color: var(--texto);
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+        .tv-container {
+            display: grid;
+            grid-template-rows: auto 1fr auto;
+            min-height: 100vh;
+            padding: 24px;
+            gap: 18px;
+        }
+        /* ─── HEADER ─── */
+        .tv-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: var(--bg-2);
+            padding: 18px 28px;
+            border-radius: 14px;
+            border-left: 6px solid var(--azul);
+        }
+        .tv-titulo {
+            font-size: 1.8em;
+            font-weight: 800;
+            letter-spacing: 1px;
+        }
+        .tv-subtitulo {
+            font-size: 1em;
+            color: var(--texto-suave);
+            margin-top: 4px;
+        }
+        .tv-clock {
+            font-family: 'Courier New', monospace;
+            font-size: 2.6em;
+            font-weight: 800;
+            color: var(--azul);
+            letter-spacing: 2px;
+        }
+        .tv-fecha {
+            text-align: right;
+            color: var(--texto-suave);
+            font-size: 1em;
+            margin-top: 4px;
+        }
+        /* ─── MAIN GRID ─── */
+        .tv-main {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 18px;
+        }
+        .tv-panel {
+            background: var(--bg-2);
+            border-radius: 14px;
+            padding: 22px;
+        }
+        .tv-panel-titulo {
+            font-size: .9em;
+            font-weight: 700;
+            color: var(--texto-suave);
+            letter-spacing: 1.2px;
+            text-transform: uppercase;
+            margin-bottom: 16px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        /* ─── KPIs ─── */
+        .kpi-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 14px;
+            margin-bottom: 22px;
+        }
+        .kpi-card {
+            background: linear-gradient(135deg, var(--bg-1), #15263b);
+            border-radius: 12px;
+            padding: 18px;
+            text-align: center;
+            border: 1px solid #2d3a4f;
+            position: relative;
+            overflow: hidden;
+        }
+        .kpi-card::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            height: 4px;
+            background: var(--azul);
+        }
+        .kpi-card.verde::before { background: var(--verde); }
+        .kpi-card.rojo::before  { background: var(--rojo); }
+        .kpi-card.amarillo::before { background: var(--amarillo); }
+        .kpi-label {
+            font-size: .75em;
+            color: var(--texto-suave);
+            letter-spacing: 1px;
+            margin-bottom: 8px;
+        }
+        .kpi-valor {
+            font-size: 3em;
+            font-weight: 900;
+            line-height: 1;
+            font-family: 'Barlow Condensed', sans-serif;
+            color: var(--azul);
+        }
+        .kpi-card.verde .kpi-valor { color: var(--verde); }
+        .kpi-card.rojo .kpi-valor  { color: var(--rojo); }
+        .kpi-card.amarillo .kpi-valor { color: var(--amarillo); }
+        .kpi-sub {
+            font-size: .8em;
+            color: var(--texto-suave);
+            margin-top: 4px;
+        }
+        /* ─── AULAS GRID ─── */
+        .aulas-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+            gap: 12px;
+        }
+        .aula-card {
+            background: linear-gradient(135deg, var(--bg-1), #15263b);
+            border-radius: 10px;
+            padding: 14px;
+            border-left: 5px solid var(--verde);
+            transition: transform .25s ease;
+        }
+        .aula-card.amarilla { border-left-color: var(--amarillo); }
+        .aula-card.roja     { border-left-color: var(--rojo); }
+        .aula-card.gris     { border-left-color: var(--texto-suave); opacity: .6; }
+        .aula-nombre {
+            font-size: 1.5em;
+            font-weight: 800;
+            margin-bottom: 4px;
+        }
+        .aula-turno {
+            font-size: .8em;
+            color: var(--texto-suave);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        .aula-asist {
+            font-size: 2.2em;
+            font-weight: 900;
+            font-family: 'Barlow Condensed', sans-serif;
+            margin-top: 8px;
+        }
+        .aula-pct { font-size: .85em; color: var(--texto-suave); margin-top: 2px; }
+        /* ─── TICKER ─── */
+        .ticker-item {
+            padding: 14px 0;
+            border-bottom: 1px solid #2d3a4f;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+        }
+        .ticker-item:last-child { border-bottom: none; }
+        .ticker-doc {
+            font-weight: 700;
+            font-size: .95em;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .ticker-meta {
+            font-size: .8em;
+            color: var(--texto-suave);
+            margin-top: 3px;
+        }
+        .ticker-hora {
+            font-family: 'Courier New', monospace;
+            font-weight: 700;
+            color: var(--verde);
+            font-size: 1.1em;
+            flex-shrink: 0;
+        }
+        /* ─── FOOTER ─── */
+        .tv-footer {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: var(--bg-2);
+            padding: 14px 24px;
+            border-radius: 10px;
+            font-size: .9em;
+            color: var(--texto-suave);
+        }
+        .tv-footer-marca {
+            font-weight: 700;
+            color: var(--azul);
+        }
+        .live-indicator {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            background: var(--rojo);
+            border-radius: 50%;
+            margin-right: 6px;
+            animation: livePulse 1.4s infinite;
+        }
+        @keyframes livePulse {
+            0%, 100% { opacity: 1; }
+            50%      { opacity: .3; }
+        }
+        /* ─── BARRA ─── */
+        .barra-asist {
+            height: 36px;
+            background: var(--bg-1);
+            border-radius: 8px;
+            overflow: hidden;
+            position: relative;
+            margin: 14px 0 0;
+        }
+        .barra-asist-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--verde), #34d399);
+            transition: width .8s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 800;
+            font-size: 1.2em;
+        }
+        @media (max-width: 1200px) {
+            .tv-main { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <div class="tv-container">
+        <!-- HEADER -->
+        <div class="tv-header">
+            <div>
+                <div class="tv-titulo">🎖️ S.I.P.A. — Monitor de Operaciones</div>
+                <div class="tv-subtitulo">Escuela de Suboficiales "Cbo. Raúl R. Cuello" · GNA</div>
+            </div>
+            <div>
+                <div class="tv-clock" id="tv-clock">--:--:--</div>
+                <div class="tv-fecha" id="tv-fecha">—</div>
+            </div>
+        </div>
+
+        <!-- MAIN -->
+        <div class="tv-main">
+            <!-- IZQUIERDA: KPIs + AULAS -->
+            <div class="tv-panel">
+                <div class="tv-panel-titulo">
+                    <span>📊 Estadísticas del Día</span>
+                    <span><span class="live-indicator"></span> EN VIVO</span>
+                </div>
+                <div class="kpi-grid">
+                    <div class="kpi-card">
+                        <div class="kpi-label">🏫 AULAS OP.</div>
+                        <div class="kpi-valor" id="kpi-aulas">—</div>
+                        <div class="kpi-sub">activas hoy</div>
+                    </div>
+                    <div class="kpi-card verde">
+                        <div class="kpi-label">✅ PRESENTES</div>
+                        <div class="kpi-valor" id="kpi-pres">—</div>
+                        <div class="kpi-sub">de <span id="kpi-fe">—</span> F.E.</div>
+                    </div>
+                    <div class="kpi-card rojo">
+                        <div class="kpi-label">❌ AUSENTES</div>
+                        <div class="kpi-valor" id="kpi-aus">—</div>
+                        <div class="kpi-sub">total del día</div>
+                    </div>
+                    <div class="kpi-card amarillo">
+                        <div class="kpi-label">✍️ FIRMAS</div>
+                        <div class="kpi-valor" id="kpi-firmas">—</div>
+                        <div class="kpi-sub">docentes hoy</div>
+                    </div>
+                </div>
+
+                <div class="tv-panel-titulo">📊 Asistencia General</div>
+                <div class="barra-asist"><div class="barra-asist-fill" id="barra-asist" style="width:0%;">0%</div></div>
+
+                <div class="tv-panel-titulo" style="margin-top:24px;">🏫 Estado de Aulas</div>
+                <div class="aulas-grid" id="aulas-grid">
+                    <div style="color:var(--texto-suave);padding:30px;text-align:center;grid-column:1/-1;">Cargando...</div>
+                </div>
+            </div>
+
+            <!-- DERECHA: TICKER + TENDENCIA -->
+            <div>
+                <div class="tv-panel" style="margin-bottom:18px;">
+                    <div class="tv-panel-titulo">✍️ Últimas Firmas</div>
+                    <div id="ticker">
+                        <div style="color:var(--texto-suave);padding:20px;text-align:center;">Esperando datos...</div>
+                    </div>
+                </div>
+                <div class="tv-panel">
+                    <div class="tv-panel-titulo">📈 Tendencia Semanal</div>
+                    <div id="tendencia" style="font-family:monospace;font-size:1.4em;line-height:1.8;text-align:center;padding:18px 0;">—</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- FOOTER -->
+        <div class="tv-footer">
+            <div><span class="tv-footer-marca">S.I.P.A.</span> · Sistema Integral de Partes de Aula · GNA 2026</div>
+            <div>🔄 Auto-refresh cada 30s · <span id="last-update">—</span></div>
+        </div>
+    </div>
+
+    <script>
+        function actualizarReloj() {
+            const ahora = new Date();
+            document.getElementById('tv-clock').textContent =
+                String(ahora.getHours()).padStart(2,'0') + ':' +
+                String(ahora.getMinutes()).padStart(2,'0') + ':' +
+                String(ahora.getSeconds()).padStart(2,'0');
+            const opciones = { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' };
+            document.getElementById('tv-fecha').textContent =
+                ahora.toLocaleDateString('es-AR', opciones);
+        }
+        setInterval(actualizarReloj, 1000);
+        actualizarReloj();
+
+        function claseAula(pct, fe) {
+            if (fe === 0) return 'gris';
+            if (pct >= 90) return '';
+            if (pct >= 75) return 'amarilla';
+            return 'roja';
+        }
+
+        async function cargarDatos() {
+            try {
+                const r = await fetch('/api/tv/datos');
+                const d = await r.json();
+                const k = d.kpis || {};
+                document.getElementById('kpi-aulas').textContent  = k.aulas_operativas || 0;
+                document.getElementById('kpi-pres').textContent   = k.presentes || 0;
+                document.getElementById('kpi-fe').textContent     = k.fe || 0;
+                document.getElementById('kpi-aus').textContent    = k.ausentes || 0;
+                document.getElementById('kpi-firmas').textContent = k.firmas_hoy || 0;
+                const pct = k.pct_general || 0;
+                const barra = document.getElementById('barra-asist');
+                barra.style.width = pct + '%';
+                barra.textContent = pct.toFixed(1) + '%';
+                if (pct < 70)      barra.style.background = 'linear-gradient(90deg,#ef4444,#f87171)';
+                else if (pct < 85) barra.style.background = 'linear-gradient(90deg,#f59e0b,#fbbf24)';
+                else               barra.style.background = 'linear-gradient(90deg,#10b981,#34d399)';
+                // Aulas
+                const grid = document.getElementById('aulas-grid');
+                if (!(d.aulas || []).length) {
+                    grid.innerHTML = '<div style="color:var(--texto-suave);padding:30px;text-align:center;grid-column:1/-1;">Sin minutas cargadas todavía.</div>';
+                } else {
+                    grid.innerHTML = d.aulas.map(a => `
+                        <div class="aula-card ${claseAula(a.pct, a.fe)}">
+                            <div class="aula-nombre">Aula ${a.aula}</div>
+                            <div class="aula-turno">${a.turno}</div>
+                            <div class="aula-asist">${a.presentes}/${a.fe}</div>
+                            <div class="aula-pct">${a.pct.toFixed(0)}% asistencia</div>
+                        </div>
+                    `).join('');
+                }
+                // Ticker
+                const ticker = document.getElementById('ticker');
+                if (!(d.ultimas_firmas || []).length) {
+                    ticker.innerHTML = '<div style="color:var(--texto-suave);padding:20px;text-align:center;">Sin firmas recientes.</div>';
+                } else {
+                    ticker.innerHTML = d.ultimas_firmas.map(f => `
+                        <div class="ticker-item">
+                            <div style="min-width:0;flex:1;">
+                                <div class="ticker-doc">${escapeHTML(f.docente)}</div>
+                                <div class="ticker-meta">Aula ${escapeHTML(f.aula)} (${escapeHTML(f.turno)})</div>
+                            </div>
+                            <div class="ticker-hora">${escapeHTML(f.hora)}</div>
+                        </div>
+                    `).join('');
+                }
+                // Tendencia
+                if ((d.tendencia || []).length > 1) {
+                    const bloques = '▁▂▃▄▅▆▇█';
+                    const vals = d.tendencia.map(t => t.pct);
+                    const mn = Math.min(...vals), mx = Math.max(...vals);
+                    const rng = (mx - mn) || 1;
+                    const spark = vals.map(v => bloques[Math.min(7, Math.max(0, Math.floor((v - mn) / rng * 7)))]).join('');
+                    document.getElementById('tendencia').innerHTML =
+                        `<div style="font-size:2.2em;color:#10b981;letter-spacing:5px;">${spark}</div>
+                         <div style="font-size:.55em;color:var(--texto-suave);margin-top:8px;">últimos 7 días · ${mn.toFixed(0)}%–${mx.toFixed(0)}%</div>`;
+                } else {
+                    document.getElementById('tendencia').textContent = '—';
+                }
+                document.getElementById('last-update').textContent = new Date().toLocaleTimeString('es-AR');
+            } catch (e) {
+                console.error('Error cargando datos TV:', e);
+            }
+        }
+        function escapeHTML(s) {
+            if (s == null) return '';
+            return String(s).replace(/[&<>"']/g, c => ({
+                '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+            })[c]);
+        }
+        cargarDatos();
+        setInterval(cargarDatos, 30000);
+    </script>
+</body>
+</html>

@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>S.I.P.A. · Kiosko · GNA</title>
+    <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600;700;800&family=DM+Mono:wght@400;500&family=DM+Sans:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --azul-oscuro: #0a1626;
+            --azul: #1e6fa8;
+            --verde: #10a372;
+            --amarillo: #f59e0b;
+            --rojo: #ef4444;
+            --texto: #e2e8f0;
+            --tenue: #94a3b8;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            min-height: 100vh;
+            background:
+                radial-gradient(circle at 15% 25%, rgba(30,111,168,.18), transparent 50%),
+                radial-gradient(circle at 85% 75%, rgba(16,163,114,.12), transparent 50%),
+                linear-gradient(135deg, #060d18 0%, var(--azul-oscuro) 100%);
+            color: var(--texto);
+            font-family: 'DM Sans', sans-serif;
+            padding: 32px;
+            overflow: hidden;
+        }
+        .kio-header {
+            display: flex; justify-content: space-between; align-items: center;
+            border-bottom: 2px solid rgba(255,255,255,.1);
+            padding-bottom: 22px; margin-bottom: 26px;
+        }
+        .kio-logo-info { display: flex; align-items: center; gap: 18px; }
+        .kio-escudo {
+            width: 68px; height: 68px;
+            border-radius: 50%;
+            background: white; padding: 4px;
+            display: flex; align-items: center; justify-content: center;
+            box-shadow: 0 4px 20px rgba(0,0,0,.4);
+        }
+        .kio-escudo img { width: 100%; height: 100%; object-fit: contain; border-radius: 50%; }
+        .kio-titulo {
+            font-family: 'Barlow Condensed', sans-serif;
+            font-size: 2.3em; font-weight: 800; letter-spacing: 3px;
+            color: white;
+            line-height: 1;
+        }
+        .kio-subtitulo {
+            font-size: .8em; color: var(--tenue); letter-spacing: 2px;
+            text-transform: uppercase; margin-top: 5px;
+        }
+        .kio-reloj {
+            text-align: right;
+            font-family: 'DM Mono', monospace;
+        }
+        .kio-fecha { font-size: .95em; color: var(--tenue); letter-spacing: 1.5px; }
+        .kio-hora  { font-size: 3em; font-weight: 700; color: white; letter-spacing: 2px; line-height: 1; margin-top: 4px; }
+
+        .kio-kpis {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 18px;
+            margin-bottom: 26px;
+        }
+        .kio-kpi {
+            background: rgba(255,255,255,.05);
+            border: 1px solid rgba(255,255,255,.12);
+            border-radius: 14px;
+            padding: 22px;
+            text-align: center;
+            backdrop-filter: blur(4px);
+        }
+        .kio-kpi-val {
+            font-family: 'Barlow Condensed', sans-serif;
+            font-size: 3.5em; font-weight: 800;
+            background: linear-gradient(135deg, white, #a8d4f0);
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+            line-height: 1;
+        }
+        .kio-kpi-lbl { font-size: .8em; color: var(--tenue); letter-spacing: 1.5px; text-transform: uppercase; margin-top: 5px; }
+
+        .kio-grid-clases {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 18px;
+        }
+        .kio-seccion {
+            background: rgba(255,255,255,.04);
+            border: 1px solid rgba(255,255,255,.1);
+            border-radius: 14px;
+            padding: 18px;
+        }
+        .kio-seccion h3 {
+            font-family: 'Barlow Condensed', sans-serif;
+            font-size: 1.4em; font-weight: 700; letter-spacing: 1.5px;
+            color: white; margin-bottom: 14px;
+            border-bottom: 1px solid rgba(255,255,255,.15);
+            padding-bottom: 10px;
+        }
+        .kio-seccion-verde h3 { color: #4ade80; }
+        .kio-seccion-amarillo h3 { color: #fbbf24; }
+
+        .kio-clase {
+            display: grid;
+            grid-template-columns: auto 1fr auto;
+            gap: 14px;
+            align-items: center;
+            padding: 11px 13px;
+            background: rgba(255,255,255,.05);
+            border-radius: 8px;
+            margin-bottom: 7px;
+            border-left: 3px solid var(--azul);
+        }
+        .kio-clase--firmado { border-left-color: var(--verde); }
+        .kio-clase--pendiente { border-left-color: var(--amarillo); }
+        .kio-clase-aula {
+            font-family: 'Barlow Condensed', sans-serif;
+            font-size: 1.6em; font-weight: 800;
+            color: white; line-height: 1;
+        }
+        .kio-clase-info-materia { font-size: .9em; font-weight: 700; color: white; }
+        .kio-clase-info-doc { font-size: .78em; color: var(--tenue); margin-top: 2px; }
+        .kio-clase-hora {
+            font-family: 'DM Mono', monospace;
+            font-size: .85em; color: var(--tenue);
+            background: rgba(0,0,0,.25);
+            padding: 4px 9px; border-radius: 6px;
+            white-space: nowrap;
+        }
+        .kio-clase-firma-ok { color: #4ade80; font-size: .8em; font-weight: 700; }
+        .kio-clase-firma-pend { color: #fbbf24; font-size: .8em; }
+
+        .kio-vacio { color: var(--tenue); text-align: center; padding: 30px; font-size: .92em; }
+        .kio-footer {
+            position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%);
+            font-size: .72em; color: var(--tenue); letter-spacing: 2px; text-transform: uppercase;
+        }
+        @media (max-width: 900px) {
+            .kio-kpis { grid-template-columns: 1fr; }
+            .kio-grid-clases { grid-template-columns: 1fr; }
+            .kio-titulo { font-size: 1.6em; }
+            .kio-hora { font-size: 2em; }
+        }
+    </style>
+</head>
+<body>
+    <div class="kio-header">
+        <div class="kio-logo-info">
+            <div class="kio-escudo">
+                <img src="/static/img/logo-tic.png" alt="GNA TIC">
+            </div>
+            <div>
+                <div class="kio-titulo">S.I.P.A.</div>
+                <div class="kio-subtitulo">Escuela de Suboficiales · Cbo. R.R. Cuello</div>
+            </div>
+        </div>
+        <div class="kio-reloj">
+            <div class="kio-fecha" id="kio-fecha">—</div>
+            <div class="kio-hora"  id="kio-hora">--:--:--</div>
+        </div>
+    </div>
+
+    <div class="kio-kpis" id="kio-kpis"></div>
+
+    <div class="kio-grid-clases">
+        <div class="kio-seccion kio-seccion-verde">
+            <h3>🟢 Clases en Curso</h3>
+            <div id="kio-en-curso"></div>
+        </div>
+        <div class="kio-seccion kio-seccion-amarillo">
+            <h3>🟡 Próximas (30 min)</h3>
+            <div id="kio-proximas"></div>
+        </div>
+    </div>
+
+    <div class="kio-footer">Tablero táctico · Actualización automática cada 30 segundos</div>
+
+<script>
+function actualizarReloj() {
+    const d = new Date();
+    const fechaStr = d.toLocaleDateString('es-AR', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' });
+    const horaStr  = d.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    document.getElementById('kio-fecha').textContent = fechaStr.charAt(0).toUpperCase() + fechaStr.slice(1);
+    document.getElementById('kio-hora').textContent  = horaStr;
+}
+setInterval(actualizarReloj, 1000); actualizarReloj();
+
+function _esc(s) {
+    return String(s ?? '')
+        .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+        .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+function renderClase(c) {
+    const cls = c.firmado ? 'kio-clase--firmado' : 'kio-clase--pendiente';
+    const firma = c.firmado ? '<div class="kio-clase-firma-ok">✓ FIRMADO</div>' : '<div class="kio-clase-firma-pend">PENDIENTE</div>';
+    return `<div class="kio-clase ${cls}">
+        <div class="kio-clase-aula">${_esc(c.aula)}</div>
+        <div>
+            <div class="kio-clase-info-materia">${_esc(c.materia || '—')}</div>
+            <div class="kio-clase-info-doc">${_esc(c.docente || '(sin docente)')} · ${_esc(c.turno)}</div>
+        </div>
+        <div style="text-align:right;">
+            <div class="kio-clase-hora">${_esc(c.hora)}</div>
+            ${firma}
+        </div>
+    </div>`;
+}
+
+async function cargarDatos() {
+    try {
+        const r = await fetch('/api/kiosko/data');
+        const d = await r.json();
+        document.getElementById('kio-kpis').innerHTML = `
+            <div class="kio-kpi"><div class="kio-kpi-val">${d.kpis.aulas_op}</div><div class="kio-kpi-lbl">🏫 Aulas Operativas</div></div>
+            <div class="kio-kpi"><div class="kio-kpi-val">${d.kpis.firmas_hoy}</div><div class="kio-kpi-lbl">✍️ Firmas del Día</div></div>
+            <div class="kio-kpi"><div class="kio-kpi-val">${d.kpis.clases_en_curso}</div><div class="kio-kpi-lbl">🟢 Clases en Curso</div></div>
+        `;
+        const ec = document.getElementById('kio-en-curso');
+        ec.innerHTML = d.clases_ahora.length
+            ? d.clases_ahora.map(renderClase).join('')
+            : '<div class="kio-vacio">⚪ No hay clases en curso en este momento</div>';
+        const pr = document.getElementById('kio-proximas');
+        pr.innerHTML = d.clases_proximas.length
+            ? d.clases_proximas.map(renderClase).join('')
+            : '<div class="kio-vacio">Sin próximas clases en los 30 minutos</div>';
+    } catch (e) {
+        console.error(e);
+    }
+}
+cargarDatos();
+setInterval(cargarDatos, 30000);
+</script>
+</body>
+</html>

@@ -1,0 +1,2065 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>S.I.P.A. — Sistema Integral de Partes de Aula · GNA</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/estilos.css') }}?v=5.7">
+
+    <!-- Chart.js para Dashboard del SU (CDN cacheable) -->
+    <script src="{{ url_for('static', filename='js/chart.umd.min.js') }}?v=4.2" defer></script>
+
+    <!-- PWA -->
+    <link rel="manifest" href="/manifest.json">
+    <meta name="theme-color" content="#0f2337">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="SIPA">
+    <link rel="apple-touch-icon" href="/static/img/logo-tic.png">
+</head>
+<body>
+
+<!-- ══ BARRA SUPERIOR ══════════════════════════════════════ -->
+<div class="top-bar">
+    <div class="top-bar-izquierda">
+        <!-- Botón hamburguesa (solo visible cuando hay sesión activa) -->
+        <button id="btn-hamburguesa" class="hamburger" aria-label="Menú" onclick="toggleSidebar()" style="display:none;">
+            <span></span><span></span><span></span>
+        </button>
+        <div class="top-bar-logo">
+            <div class="top-bar-escudo">
+                <img src="{{ url_for('static', filename='img/logo-tic.png') }}"
+                     alt="GNA TIC" class="top-bar-logo-img"
+                     onerror="this.style.display='none';this.parentElement.classList.add('top-bar-escudo--fallback')">
+            </div>
+            <div class="top-bar-texto">
+                <div class="top-bar-pais">República Argentina</div>
+                <div class="top-bar-nombre">Gendarmería Nacional</div>
+            </div>
+        </div>
+    </div>
+    <div class="top-bar-derecha">
+        <div class="top-bar-escuela">Escuela de Suboficiales "Cbo. Raúl R. Cuello"</div>
+        <div class="top-bar-derecha-fila">
+            <span id="fecha-reloj"></span>
+            <span id="theme-toggle-slot"></span>
+        </div>
+    </div>
+</div>
+
+<!-- ══ SIDEBAR DRAWER (oculto hasta que se abra) ══════════ -->
+<div id="sidebar-overlay" class="sidebar-overlay" onclick="toggleSidebar()"></div>
+<aside id="sidebar" class="sidebar" aria-hidden="true">
+    <div class="sidebar-header">
+        <div class="sidebar-titulo">
+            <span id="sidebar-rol-icon">📋</span>
+            <span id="sidebar-rol-nombre">Módulo</span>
+        </div>
+        <div class="sidebar-sub" id="sidebar-rol-sub">Sesión activa</div>
+    </div>
+    <nav class="sidebar-menu" id="sidebar-menu">
+        <!-- Se rellena dinámicamente por JS según rol -->
+    </nav>
+    <div class="sidebar-footer">
+        <button class="sidebar-item sidebar-item-volver" onclick="volverInicio()">
+            🏠 <span>Volver al Inicio</span>
+        </button>
+        <button class="sidebar-item sidebar-item-cerrar" onclick="cerrarSesionUniversal()">
+            🚪 <span>Cerrar Sesión</span>
+        </button>
+    </div>
+</aside>
+
+<!-- ══ HERO BANNER ═════════════════════════════════════════ -->
+<div class="hero-banner">
+    <div class="hero-content">
+        <div class="hero-logo-escuela"
+             role="img" aria-label="Escuela de Suboficiales Cabo Raúl Remberto Cuello"
+             style="background-image:url('{{ url_for('static', filename='img/logo-escuela.png') }}')"></div>
+        <div class="hero-texto">
+            <div class="hero-titulo">S.I.P.A.</div>
+            <img src="{{ url_for('static', filename='img/emblema-sables.png') }}"
+                 alt="Sables cruzados" class="hero-emblema"
+                 onerror="this.style.display='none'">
+            <div class="hero-subtitulo">Sistema Integral de Partes de Aula</div>
+            <div class="hero-inst">Escuela de Suboficiales "Cbo. Raúl R. Cuello" · GNA 2026</div>
+        </div>
+        <img src="{{ url_for('static', filename='img/logo-tic.png') }}"
+             alt="GNA TIC" class="hero-logo hero-logo-tic"
+             onerror="this.style.display='none'">
+    </div>
+</div>
+
+<!-- ══ MODAL PIN (teclado numérico) ═══════════════════════ -->
+<div id="pin-modal-overlay" class="pin-modal-overlay" onclick="if(event.target===this)cerrarPinModal()">
+    <div class="pin-modal-sheet" onclick="event.stopPropagation()">
+        <div class="pin-modal-handle"></div>
+        <div id="pin-modal-titulo" class="pin-modal-titulo">Ingresar PIN del Bedel</div>
+
+        <!-- Display de puntos -->
+        <div id="pin-modal-display" class="pin-modal-display">
+            <div class="pin-dot" id="pd0"></div>
+            <div class="pin-dot" id="pd1"></div>
+            <div class="pin-dot" id="pd2"></div>
+            <div class="pin-dot" id="pd3"></div>
+        </div>
+
+        <!-- Teclado numérico -->
+        <div class="pin-teclado">
+            <button class="pin-key" onclick="pinTecla(1)">1</button>
+            <button class="pin-key" onclick="pinTecla(2)">2</button>
+            <button class="pin-key" onclick="pinTecla(3)">3</button>
+            <button class="pin-key" onclick="pinTecla(4)">4</button>
+            <button class="pin-key" onclick="pinTecla(5)">5</button>
+            <button class="pin-key" onclick="pinTecla(6)">6</button>
+            <button class="pin-key" onclick="pinTecla(7)">7</button>
+            <button class="pin-key" onclick="pinTecla(8)">8</button>
+            <button class="pin-key" onclick="pinTecla(9)">9</button>
+            <button class="pin-key pin-key--borrar" onclick="pinBorrar()">⌫</button>
+            <button class="pin-key" onclick="pinTecla(0)">0</button>
+            <button class="pin-key pin-key--confirmar" id="pin-btn-enviar" onclick="enviarPinModal()">Firmar ✓</button>
+        </div>
+        <p style="margin:8px 0 0;font-size:.78em;color:var(--texto-suave);">
+            La ubicación es opcional y solo se adjunta si el navegador la proporciona; no impide registrar la firma.
+        </p>
+        <button class="pin-modal-cerrar" onclick="cerrarPinModal()">Cancelar</button>
+    </div>
+</div>
+
+<!-- ══ PANTALLA DE BIENVENIDA — TRIPLE PORTAL ═════════════════ -->
+<div id="welcome-screen" class="welcome-screen">
+    <div class="welcome-inner">
+        <h1 class="welcome-titulo">Seleccione su Módulo Operativo de Aula</h1>
+        <p class="welcome-sub">Sistema Integral de Partes de Aula · GNA 2026</p>
+
+        <div class="welcome-cards">
+            <div class="welcome-card" data-rol="bedel" onclick="seleccionarPortal('bedel')">
+                <div class="welcome-icon">📝</div>
+                <div class="welcome-card-titulo">Bedelía</div>
+                <div class="welcome-card-desc">
+                    Acceso operativo por PIN diario.<br>
+                    Carga de partes de novedades, asistencia y firmas docentes en el aula.
+                </div>
+                <div class="welcome-card-pie">PIN del día →</div>
+            </div>
+
+            <div class="welcome-card" data-rol="docente" onclick="seleccionarPortal('docente')">
+                <div class="welcome-icon">🖋️</div>
+                <div class="welcome-card-titulo">Portal Docente</div>
+                <div class="welcome-card-desc">
+                    Mi horario semanal · Firma de presentismo · Justificaciones retroactivas · Historial.
+                </div>
+                <div class="welcome-card-pie">Email y clave →</div>
+            </div>
+
+            <div class="welcome-card" data-rol="admin" onclick="seleccionarPortal('admin')">
+                <div class="welcome-icon">🛡️</div>
+                <div class="welcome-card-titulo">Plana Mayor</div>
+                <div class="welcome-card-desc">
+                    Monitor táctico en tiempo real · Auditoría individual · Registro de inasistencias · Reportes.
+                </div>
+                <div class="welcome-card-pie">Credenciales →</div>
+            </div>
+        </div>
+
+        <div class="welcome-tic">
+            <button class="welcome-tic-btn" onclick="seleccionarPortal('tic')">
+                🔒 Soporte Técnico TIC
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- ══ CONTENIDO PRINCIPAL ══════════════════════════════════ -->
+<div class="container" id="container-principal" style="display:none;">
+    <!-- Nav tabs ahora ocultos por defecto (se navega por hamburguesa) -->
+    <nav class="nav" style="display:none;">
+        <div class="nav-item active" onclick="mostrarPestanaPrincipal('bedel-container',this)">📝 Bedelía</div>
+        <div class="nav-item"        onclick="mostrarPestanaPrincipal('docente-container',this)">🖋️ Portal Docente</div>
+        <div class="nav-item"        onclick="mostrarPestanaPrincipal('servicio-container',this)">🛡️ Plana Mayor</div>
+    </nav>
+
+    <!-- ══ BEDELÍA ══════════════════════════════════════════ -->
+    <div id="bedel-container" class="section active">
+        <div id="login-bedel" class="card" style="text-align:center;max-width:440px;margin:40px auto;border-top:5px solid var(--azul-primario);">
+            <h2 style="color:var(--azul-oscuro);margin-top:0;font-family:'Barlow Condensed',sans-serif;font-size:1.8em;letter-spacing:1px;">Ingreso Operativo</h2>
+            <p style="color:var(--texto-suave);font-size:.9em;margin-bottom:25px;">Ingrese el PIN de seguridad asignado a su Aula para el día de hoy.</p>
+            <input type="password" id="pass-bedel" class="pin-input" maxlength="6" placeholder="••••" autocomplete="off">
+            <button class="btn btn-primary btn-full" onclick="ingresarBedel()">🔓 Desbloquear Planilla</button>
+        </div>
+        <div id="panel-bedel" style="display:none;">
+            <div class="session-header session-header--bedel">
+                <div class="session-header-info">
+                    <div class="session-header-rol">Sesión de Bedelía</div>
+                    <div class="session-header-usuario" id="bedel-aula-info">📝 Aula —</div>
+                    <div class="session-header-meta" id="bedel-fecha-info"></div>
+                </div>
+                <button class="btn-cerrar-sesion" onclick="cerrarSesionBedel()">🚪 Cerrar Sesión</button>
+            </div>
+            <div id="bedel-cierre-aviso" class="bd-error-banner" style="display:none;margin-bottom:16px;"></div>
+            <!-- Vincular Telegram (Bloque 3) -->
+            <details id="bedel-telegram-vinculacion" class="card" style="display:none;border-top:4px solid #0088cc;background:#f0f9ff;margin-bottom:18px;">
+                <summary style="cursor:pointer;font-weight:700;color:#0369a1;font-size:1.05em;">
+                    🔗 Vincular Telegram (recibí tu PIN al instante en tu celular)
+                </summary>
+                <div style="margin-top:14px;">
+                    <p style="color:var(--texto-suave);font-size:.9em;line-height:1.6;">
+                        Hablá con <b>@sipa_cuello_bot</b> en Telegram → mandá <code>/start</code> → te dará un código.<br>
+                        Después <b>ingresalo acá abajo</b> y vas a poder pedirle al bot:
+                        <code>/mi_pin</code>, <code>/mi_aula</code>, <code>/mi_padron</code>, <code>/mi_cronograma</code>, <code>/link_pc</code>.
+                    </p>
+                    <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin-top:10px;">
+                        <div style="flex:1 1 200px;">
+                            <label>Código de 6 dígitos</label>
+                            <input type="text" id="bedel-tg-codigo" placeholder="123456" maxlength="6"
+                                   inputmode="numeric" pattern="[0-9]*"
+                                   style="font-family:'DM Mono',monospace;font-size:1.4em;letter-spacing:6px;text-align:center;">
+                        </div>
+                        <button class="btn btn-primary" onclick="vincularTelegramBedel()" style="margin:0;">🔗 Vincular</button>
+                    </div>
+                    <div id="bedel-tg-result" style="margin-top:10px;"></div>
+                </div>
+            </details>
+
+            <div id="bedel-formulario-operativo">
+            <h2 class="section-title blue">Parte de Novedades y Asistencia</h2>
+            <div id="bedel-coberturas-lista"></div>
+            <div id="bedel-solicitar-cobertura" class="card" style="display:none;border-left:4px solid #7c3aed;background:#faf5ff;">
+                <strong style="color:#6d28d9;">Solicitar reemplazo PGNP</strong>
+                <p style="font-size:.88em;color:var(--texto-suave);margin:6px 0 12px;">
+                    Seleccione la clase del docente ausente y envíe el pedido a Plana Mayor. El reemplazo solo queda autorizado cuando sea aprobado.
+                </p>
+                <div id="bedel-cobertura-solicitud-formulario" class="grid" style="align-items:end;">
+                    <div><label for="bedel-cobertura-clase">Clase del cronograma</label><select id="bedel-cobertura-clase"></select></div>
+                    <div><label for="bedel-cobertura-motivo">Motivo</label><input id="bedel-cobertura-motivo" maxlength="500" placeholder="Motivo de la solicitud"></div>
+                    <div><button class="btn btn-primary" type="button" onclick="solicitarCoberturaBedel()">Enviar solicitud</button></div>
+                </div>
+                <div id="bedel-cobertura-pin-aviso" style="display:none;color:var(--texto-suave);font-size:.9em;">
+                    Para solicitar una cobertura, cierre la sesión e ingrese con el PIN diario del aula.
+                </div>
+            </div>
+            <div class="grid">
+                <div><label>Fecha</label><input type="date" id="b-fecha" readonly tabindex="-1" inputmode="none" onkeydown="return false"></div>
+                <div><label>Turno</label><input type="text" id="b-turno" readonly style="color:var(--azul-primario);font-weight:700;"></div>
+                <div><label>Aula</label><input type="text" id="b-aula" readonly style="color:var(--azul-primario);font-weight:700;"></div>
+            </div>
+            <div class="grid">
+                <div class="card" style="margin-bottom:0;padding:15px;background:#f8fafc;box-shadow:none;"><label>Bedel</label><div id="container-bedel"></div></div>
+                <div class="card" style="margin-bottom:0;padding:15px;background:#f8fafc;box-shadow:none;"><label>Sub-Bedel</label><div id="container-subbedel"></div></div>
+            </div>
+            <div class="kpi-bar">
+                <div class="kpi-item"><span class="kpi-label">Fuerza Efectiva (F.E.)</span>
+                    <input type="number" id="b-fe" value="0" oninput="recalcularNumeros()" style="text-align:center;font-family:'Barlow Condensed',sans-serif;font-size:1.6em;font-weight:800;color:var(--azul-primario);border:none;background:transparent;padding:0;width:100%;margin-top:4px;"></div>
+                <div class="kpi-item" style="border-left:1px solid var(--borde);border-right:1px solid var(--borde);"><span class="kpi-label">Presentes</span>
+                    <input type="number" id="b-pres" value="0" readonly style="text-align:center;font-family:'Barlow Condensed',sans-serif;font-size:1.6em;font-weight:800;color:var(--exito-cl);border:none;background:transparent;padding:0;width:100%;margin-top:4px;"></div>
+                <div class="kpi-item"><span class="kpi-label">Ausentes</span>
+                    <input type="number" id="b-aus-cant" value="0" readonly style="text-align:center;font-family:'Barlow Condensed',sans-serif;font-size:1.6em;font-weight:800;color:var(--peligro-cl);border:none;background:transparent;padding:0;width:100%;margin-top:4px;"></div>
+            </div>
+            <h3 class="section-title" style="margin-top:28px;">📚 Dictado de Materias</h3>
+            <div class="table-responsive">
+                <table id="tabla-diaria">
+                    <thead><tr><th>Horario</th><th>Asignatura</th><th>Docente Asignado</th><th>Asistencia</th></tr></thead>
+                    <tbody id="body-diario"></tbody>
+                </table>
+            </div>
+            <button class="btn btn-dark btn-small" onclick="addFilaExtraDiaria()">+ Anexar Materia</button>
+            <h3 class="section-title red" style="margin-top:32px;">🚫 Nómina de Ausentes</h3>
+            <p style="font-size:.85em;color:var(--texto-suave);margin-top:-8px;margin-bottom:12px;">Seleccione del padrón oficial. Use ✍️ para entrada manual.</p>
+            <div id="ausentes-list"></div>
+            <button class="btn btn-danger" style="margin-top:8px;" onclick="addAusenteRow()">+ Registrar Inasistencia</button>
+            <div style="margin-top:28px;">
+                <label>Novedades Generales</label>
+                <textarea id="b-nov" rows="3" placeholder="Novedades materiales o dejar en blanco si es Sin Novedad."></textarea>
+            </div>
+            <div style="display:flex;gap:12px;margin-top:24px;flex-wrap:wrap;">
+                <button class="btn btn-primary" style="flex:1;min-width:180px;font-size:1.05em;padding:15px;" onclick="enviarPlanilla(false)">💾 Guardar Planilla Oficial</button>
+                <button class="btn btn-whatsapp" style="flex:1;min-width:180px;font-size:1.05em;padding:15px;" onclick="enviarPlanilla(true)">📲 Compartir por WhatsApp</button>
+            </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ══ PORTAL DOCENTE ═══════════════════════════════════ -->
+    <div id="docente-container" class="section">
+
+        <!-- LOGIN -->
+        <div class="login-wrapper" id="login-docente">
+            <div class="login-box" style="border-top-color:var(--verde-inst);">
+                <h2 style="color:var(--verde-inst);">Portal Docente</h2>
+                <p>Ingrese sus credenciales para acceder al sistema de firma.</p>
+                <div style="margin-bottom:14px;text-align:left;"><label>Correo Electrónico</label><input type="email" id="doc-email" autocomplete="username" placeholder="correo@gna.edu.ar"></div>
+                <div style="margin-bottom:24px;text-align:left;"><label>Contraseña</label><input type="password" id="doc-pass" autocomplete="current-password" placeholder="••••••••"></div>
+                <button class="btn btn-info btn-full" onclick="docenteLogin()">Ingresar</button>
+                <div style="margin-top:14px;display:flex;justify-content:center;gap:16px;">
+                    <span class="link-text" onclick="mostrarRegistroDoc()">Crear cuenta nueva</span>
+                    <span style="color:var(--borde);">|</span>
+                    <span class="link-text" onclick="mostrarRecuperarDoc()">Olvidé mi clave</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- REGISTRO -->
+        <div class="login-wrapper" id="registro-docente" style="display:none;">
+            <div class="login-box" style="border-top-color:var(--azul-primario);">
+                <h2 style="color:var(--azul-primario);">Registro de Profesor</h2>
+                <p>Docente titular: seleccione el nombre tal como figura en el cronograma; así su cuenta queda vinculada a sus aulas. Si el nombre no está o aparece mal, solicite la corrección a TIC antes de registrarse. Las cuentas PGNP requieren habilitación posterior de TIC.</p>
+                <div style="margin-bottom:12px;text-align:left;"><label for="reg-tipo-cuenta">Tipo de cuenta</label>
+                    <select id="reg-tipo-cuenta" onchange="cambiarTipoCuentaDocente()">
+                        <option value="docente">Docente del cronograma</option>
+                        <option value="pgnp">PGNP (Profesor Gendarme No Permanente)</option>
+                    </select>
+                </div>
+                <div id="reg-nombre-oficial-wrap" style="margin-bottom:12px;text-align:left;"><label>Nombre Oficial</label><select id="reg-nombre"><option value="">Cargando…</option></select></div>
+                <div id="reg-nombre-pgnp-wrap" style="display:none;margin-bottom:12px;text-align:left;"><label for="reg-nombre-pgnp">Nombre y apellido del PGNP</label><input id="reg-nombre-pgnp" maxlength="150" autocomplete="name"></div>
+                <div style="margin-bottom:10px;"><label>DNI</label><input type="text" id="reg-dni"></div>
+                <div style="margin-bottom:10px;"><label>Correo Electrónico</label><input type="email" id="reg-email"></div>
+                <div style="margin-bottom:20px;"><label>Contraseña</label><input type="password" id="reg-pass"></div>
+                <button class="btn btn-primary btn-full" onclick="docenteRegistrar()">Crear Cuenta</button>
+                <div style="margin-top:12px;text-align:center;"><span class="link-text" onclick="volverLoginDoc()">← Volver al Inicio</span></div>
+            </div>
+        </div>
+
+        <!-- RECUPERAR -->
+        <div class="login-wrapper" id="recuperar-docente" style="display:none;">
+            <div class="login-box" style="border-top-color:var(--advertencia);">
+                <h2 style="color:var(--advertencia);">Recuperar Acceso</h2>
+                <p>Verifique su identidad para restablecer la contraseña.</p>
+                <div style="margin-bottom:10px;"><label>Correo</label><input type="email" id="rec-email"></div>
+                <div style="margin-bottom:10px;"><label>DNI</label><input type="text" id="rec-dni"></div>
+                <div style="margin-bottom:20px;"><label>Nueva Contraseña</label><input type="password" id="rec-pass"></div>
+                <button class="btn btn-warning btn-full" onclick="docenteRecuperar()">Cambiar Contraseña</button>
+                <div style="margin-top:12px;text-align:center;"><span class="link-text" onclick="volverLoginDoc()">← Volver al Inicio</span></div>
+            </div>
+        </div>
+
+        <!-- PANEL DOCENTE — MI JORNADA -->
+        <div id="panel-docente" style="display:none;">
+
+            <!-- Encabezado de sesión -->
+            <div class="session-header session-header--docente">
+                <div class="session-header-info">
+                    <div class="session-header-rol">Portal Docente</div>
+                    <div class="session-header-usuario" id="docente-saludo">Bienvenido/a</div>
+                    <div class="session-header-meta" id="docente-logueado"></div>
+                    <div class="session-header-meta" id="docente-fecha-hoy" style="opacity:.7;"></div>
+                </div>
+                <button class="btn-cerrar-sesion" onclick="volverLoginDoc()">🚪 Cerrar Sesión</button>
+            </div>
+
+            <!-- ALERTA: clases pendientes de regularizar -->
+            <div id="alerta-pendientes"></div>
+
+            <div id="panel-coberturas-pgnp" class="card" style="display:none;border-top:4px solid #7c3aed;margin-bottom:14px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
+                    <h3 style="margin:0;color:#6d28d9;font-family:'Barlow Condensed',sans-serif;">👨‍🏫 Mis coberturas PGNP</h3>
+                    <button class="btn btn-info btn-small" onclick="cargarCoberturasPgnp()">🔄 Actualizar</button>
+                </div>
+                <p style="font-size:.86em;color:var(--texto-suave);">Firme aquí únicamente las clases que Plana Mayor le asignó. Su firma acredita la cobertura, no la asistencia del titular.</p>
+                <div id="coberturas-pgnp-lista"></div>
+            </div>
+
+            <div class="card" id="docente-adelantos-horario" style="margin-bottom:14px;border-top:4px solid #0ea5e9;">
+                <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+                    <h3 style="margin:0;color:var(--azul-oscuro);font-family:'Barlow Condensed',sans-serif;">⏩ Adelantar una clase</h3>
+                    <span id="docente-adelantos-estado" class="badge-mini">Consultando disponibilidad…</span>
+                </div>
+                <p style="font-size:.88em;color:var(--texto-suave);">
+                    Cuando TIC habilita la función, SIPA aplica el cambio automáticamente si no hay conflictos y lo deja registrado para revisión. El cronograma semanal habitual no se modifica.
+                </p>
+                <div id="docente-adelantos-form" style="display:none;">
+                    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px;align-items:end;">
+                        <label>Clase del cronograma
+                            <select id="docente-adelanto-clase"><option value="">Cargando clases…</option></select>
+                        </label>
+                        <label>Fecha original
+                            <input type="date" id="docente-adelanto-origen">
+                        </label>
+                        <label>Nueva fecha (igual o anterior)
+                            <input type="date" id="docente-adelanto-fecha">
+                        </label>
+                        <label>Nuevo horario de inicio
+                            <input type="time" id="docente-adelanto-hora">
+                        </label>
+                    </div>
+                    <p style="font-size:.82em;color:var(--texto-suave);">La duración de la clase se conserva. El nuevo horario debe finalizar antes del horario original y no superponerse con otra clase del docente o del aula.</p>
+                    <button class="btn btn-primary btn-small" onclick="solicitarAdelantoHorario()">⏩ Aplicar adelanto automáticamente</button>
+                </div>
+                <div id="docente-adelantos-historial" style="margin-top:12px;"></div>
+            </div>
+
+            <!-- MIS MATERIAS — HORARIO SEMANAL + FIRMA -->
+            <div class="card" style="margin-bottom:14px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:8px;">
+                    <h3 style="margin:0;font-family:'Barlow Condensed',sans-serif;color:var(--azul-oscuro);font-size:1.15em;letter-spacing:.5px;">📚 MIS MATERIAS</h3>
+                    <button class="btn btn-info btn-small" onclick="cargarHorarioSemanal()" style="margin-top:0;">🔄 Actualizar</button>
+                </div>
+                <p style="color:var(--texto-suave);font-size:.84em;margin-top:-6px;margin-bottom:14px;">Horario semanal completo. Use el botón <strong>Firmar</strong> debajo de cada materia e ingrese el PIN del aula para registrar su asistencia.</p>
+                <div id="horario-semanal-list">
+                    <p style="color:var(--texto-tenue);text-align:center;padding:20px;">Cargando…</p>
+                </div>
+            </div>
+
+            <!-- JUSTIFICACIONES ENVIADAS POR EL DOCENTE -->
+            <div class="card" style="margin-bottom:14px;border-top:4px solid #f59e0b;">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;gap:8px;flex-wrap:wrap;">
+                    <h3 style="margin:0;font-family:'Barlow Condensed',sans-serif;color:var(--azul-oscuro);font-size:1.05em;">📝 MIS JUSTIFICACIONES</h3>
+                    <button class="btn btn-dark btn-small" onclick="cargarJustificacionesDocente()">🔄 Actualizar</button>
+                </div>
+                <p style="color:var(--texto-suave);font-size:.84em;margin:0 0 10px;">Consulte el estado de sus solicitudes y las observaciones de Plana Mayor. Una aprobación acepta la justificación; no registra una firma de asistencia.</p>
+                <div id="justificaciones-docente-lista">
+                    <div class="historial-vacio">Inicie sesión para consultar sus justificaciones.</div>
+                </div>
+            </div>
+
+            <!-- HISTORIAL DE ASISTENCIAS -->
+            <div class="card">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:8px;">
+                    <h3 style="margin:0;font-family:'Barlow Condensed',sans-serif;color:var(--azul-oscuro);font-size:1.05em;letter-spacing:.5px;">📋 MI HISTORIAL DE ASISTENCIAS</h3>
+                    <button class="btn btn-dark btn-small" onclick="cargarHistorialFirmasDocente()" style="margin-top:0;">🔄</button>
+                </div>
+                <div id="historial-firmas-docente">
+                    <p style="color:var(--texto-tenue);text-align:center;padding:20px;">Cargando historial…</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ══ PLANA MAYOR ════════════════════════════════════════ -->
+    <div id="servicio-container" class="section">
+
+        <!-- LOGIN ADMIN -->
+        <div class="login-wrapper" id="login-admin">
+            <div class="login-box" style="border-top-color:var(--azul-oscuro);">
+                <h2 style="color:var(--azul-oscuro);">Autenticación Jerárquica</h2>
+                <p>Ingrese sus credenciales de Plana Mayor.</p>
+                <div style="margin-bottom:12px;text-align:left;">
+                    <label>Usuario <span style="color:var(--texto-tenue);font-size:.85em;">(opcional — vacío usa clave maestra)</span></label>
+                    <input type="text" id="user-admin" placeholder="oficial.lopez" autocomplete="username">
+                </div>
+                <div style="margin-bottom:18px;text-align:left;">
+                    <label>Clave</label>
+                    <input type="password" id="pass-admin" placeholder="••••••••" autocomplete="current-password">
+                </div>
+                <button class="btn btn-dark btn-full" onclick="ingresarAdmin()">🔐 Ingresar al Panel</button>
+            </div>
+        </div>
+
+        <!-- PANEL ADMIN -->
+        <div id="panel-admin" style="display:none;">
+            <div class="session-header session-header--admin">
+                <div class="session-header-info">
+                    <div class="session-header-rol">Plana Mayor — Monitor Táctico</div>
+                    <div class="session-header-usuario" id="admin-usuario-info">🛡️ Operador</div>
+                    <div class="session-header-meta" id="admin-sesion-info"></div>
+                </div>
+                <button class="btn-cerrar-sesion" onclick="cerrarSesionAdmin()">🚪 Cerrar Sesión</button>
+            </div>
+
+            <div class="admin-control-strip" aria-label="Estado del panel">
+                <div class="admin-control-title">
+                    <strong>Centro de control operativo</strong>
+                    <span>Gestión de firmas, novedades y reportes</span>
+                </div>
+                <div class="admin-control-status">
+                    <span class="admin-status-badge admin-status-badge--ok"><span></span> Sesión activa</span>
+                    <span class="admin-status-badge">📡 Monitor disponible</span>
+                </div>
+            </div>
+
+            <div class="sub-nav-container">
+                <div class="sub-nav active" onclick="mostrarPestanaAdmin('admin-reportes',this)">🗂️ Archivo Histórico</div>
+                <div class="sub-nav"        onclick="mostrarPestanaAdmin('admin-pines',this)">🔑 PINes</div>
+                <div class="sub-nav"        id="nav-firmas-tardias" onclick="mostrarPestanaAdmin('admin-firmas-tardias',this)">
+                    ⏳ Firmas tardías <span id="firmas-tardias-pendientes-badge" class="badge-mini badge-mini-naranja" style="display:none;margin-left:5px;">0</span>
+                </div>
+                <div class="sub-nav" onclick="mostrarPestanaAdmin('admin-calendario',this)">📅 Días sin actividad</div>
+                <div class="sub-nav" onclick="mostrarPestanaAdmin('admin-coberturas',this)">👨‍🏫 Coberturas PGNP</div>
+                <div class="sub-nav" onclick="mostrarPestanaAdmin('admin-adelantos-horario',this)">⏩ Adelantos de horario</div>
+                <div class="sub-nav"        onclick="mostrarPestanaAdmin('admin-registro',this)">📡 Monitor & Firmas</div>
+                <div class="sub-nav sub-nav-su" id="nav-tab-config"
+                     onclick="mostrarPestanaAdmin('admin-config',this)"
+                     style="display:none;">🔧 Configuración (TIC)</div>
+            </div>
+
+            <div id="admin-adelantos-horario" class="admin-section">
+                <div class="card" style="border-top:4px solid #0ea5e9;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+                        <div>
+                            <h3 class="section-title" style="color:var(--azul-oscuro);">⏩ Adelantos de horario</h3>
+                            <p style="margin:0;color:var(--texto-suave);">Los adelantos se aplican automáticamente al estar habilitados. Consultá cada caso y, si todavía no afectó minutas ni firmas, podés revocarlo.</p>
+                        </div>
+                        <button id="btn-toggle-adelantos-horario" class="btn btn-warning" onclick="toggleAdelantosHorario()" style="display:none;"></button>
+                    </div>
+                    <div id="admin-adelantos-horario-estado" style="margin:12px 0;"></div>
+                    <div style="display:flex;justify-content:flex-end;margin-bottom:10px;">
+                        <button class="btn btn-primary btn-small" onclick="cargarAdelantosHorarioAdmin()">🔄 Actualizar</button>
+                    </div>
+                    <div id="admin-adelantos-horario-lista">
+                        <div class="empty-state">Cargando historial de adelantos…</div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="admin-firmas-tardias" class="admin-section">
+                <div class="card" style="border-top:4px solid var(--advertencia-cl);">
+                    <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+                        <div>
+                            <h3 class="section-title" style="color:var(--advertencia);border-color:var(--advertencia-cl);">⏳ Firmas tardías pendientes</h3>
+                            <p style="margin:0;color:var(--texto-suave);">Revisá las solicitudes enviadas por docentes. Las decisiones quedan registradas en S.I.P.A.; Telegram sigue funcionando como canal alternativo.</p>
+                        </div>
+                        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                            <select id="firmas-tardias-filtro" aria-label="Filtrar solicitudes de firmas tardías"
+                                    onchange="cargarFirmasTardiasPendientes()" style="width:auto;min-width:170px;">
+                                <option value="pendiente">Pendientes</option>
+                                <option value="resueltas">Revisadas</option>
+                            </select>
+                            <button class="btn btn-primary btn-small" onclick="cargarFirmasTardiasPendientes()">🔄 Actualizar</button>
+                        </div>
+                    </div>
+                    <div id="firmas-tardias-pendientes-lista" style="margin-top:18px;">
+                        <div class="empty-state"><span class="empty-state-icon">⏳</span><span class="empty-state-text">Cargando solicitudes pendientes…</span></div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="admin-calendario" class="admin-section">
+                <div class="card" style="border-top:4px solid #0ea5e9;">
+                    <h3 class="section-title" style="color:#0369a1;border-color:#bae6fd;">📅 Feriados y días sin actividad</h3>
+                    <p style="color:var(--texto-suave);font-size:.92em;">
+                        TIC programa el cierre y Plana Mayor lo confirma. Solo los cierres confirmados excluyen la jornada
+                        de las faltas; puede autorizar aulas con actividad mediante una excepción.
+                    </p>
+                    <button class="btn btn-primary btn-small" onclick="cargarCalendarioNoActividad()">🔄 Actualizar calendario</button>
+                    <div id="calendario-formulario" style="display:none;">
+                        <div class="grid" style="align-items:end;">
+                            <div><label for="cal-fecha">Fecha</label><input type="date" id="cal-fecha"></div>
+                            <div><label for="cal-alcance">Alcance</label>
+                                <select id="cal-alcance" onchange="actualizarCamposCalendario()">
+                                    <option value="institucion">Toda la institución</option>
+                                    <option value="turno">Un turno</option>
+                                    <option value="aula">Un aula</option>
+                                </select>
+                            </div>
+                            <div id="cal-turno-wrap" style="display:none;"><label for="cal-turno">Turno</label>
+                                <select id="cal-turno"><option value="TM">Mañana</option><option value="TT">Tarde</option></select>
+                            </div>
+                            <div id="cal-aula-wrap" style="display:none;"><label for="cal-aula">Aula</label><input id="cal-aula" maxlength="50" placeholder="Ej.: 1° A"></div>
+                            <div><label for="cal-motivo">Motivo</label><input id="cal-motivo" maxlength="200" placeholder="Feriado nacional, acto institucional…"></div>
+                            <div><button class="btn btn-primary" onclick="crearDiaSinActividad()">➕ Programar cierre</button></div>
+                        </div>
+                        <p style="font-size:.82em;color:var(--texto-suave);margin:8px 0 0;">Los cierres por aula afectan solo a esa aula y turno.</p>
+                    </div>
+                    <div id="calendario-no-actividad-lista" style="margin-top:18px;">
+                        <div class="empty-state"><span class="empty-state-icon">⏳</span><span class="empty-state-text">Cargando calendario…</span></div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="admin-coberturas" class="admin-section">
+                <div class="card" style="border-top:4px solid #7c3aed;">
+                    <h3 class="section-title" style="color:#6d28d9;border-color:#ddd6fe;">👨‍🏫 Coberturas de clase · PGNP</h3>
+                    <p style="color:var(--texto-suave);font-size:.92em;">
+                        La solicitud se valida contra el cronograma. Plana Mayor autoriza o rechaza; el PGNP firma desde su cuenta.
+                        La constancia no cambia al titular ni elimina su inasistencia.
+                    </p>
+                    <div class="grid" style="align-items:end;">
+                        <div><label for="cob-fecha">Fecha de clase</label><input type="date" id="cob-fecha"></div>
+                        <div><label for="cob-aula">Aula</label><input id="cob-aula" maxlength="50"></div>
+                        <div><label for="cob-turno">Turno</label><select id="cob-turno"><option value="TM">Mañana</option><option value="TT">Tarde</option></select></div>
+                        <div><label for="cob-titular">Docente titular</label><input id="cob-titular" maxlength="150" placeholder="Nombre del cronograma"></div>
+                        <div><label for="cob-materia">Materia</label><input id="cob-materia" maxlength="150"></div>
+                        <div><label for="cob-hora">Horario</label><input id="cob-hora" maxlength="40" placeholder="08:00-09:20"></div>
+                        <div><label for="cob-pgnp">PGNP propuesto</label><select id="cob-pgnp"><option value="">Cargando PGNP…</option></select></div>
+                        <div><button class="btn btn-primary" onclick="crearCoberturaDocente()">Solicitar autorización</button></div>
+                    </div>
+                    <div style="display:flex;gap:10px;align-items:end;flex-wrap:wrap;margin-top:20px;">
+                        <div><label for="cob-filtro-estado">Estado</label><select id="cob-filtro-estado" onchange="cargarCoberturasDocente()">
+                            <option value="">Todas</option><option value="solicitada">Solicitadas por Bedelía</option><option value="pendiente">Pendientes</option>
+                            <option value="aprobada">Aprobadas</option><option value="completada">Firmadas</option>
+                            <option value="rechazada">Rechazadas</option><option value="cancelada">Canceladas</option>
+                        </select></div>
+                        <button class="btn btn-primary btn-small" onclick="cargarCoberturasDocente()">🔄 Actualizar</button>
+                    </div>
+                    <div id="coberturas-lista" style="margin-top:16px;"></div>
+                </div>
+            </div>
+
+            <!-- ── MONITOR TÁCTICO ──────────────────────────── -->
+            <div id="admin-reportes" class="admin-section active">
+
+                <hr class="divider" style="margin:0 0 24px;border:none;">
+
+                <!-- Filtros de historial -->
+                <div class="card" style="background:#f8fafc;border:1px solid var(--borde);">
+                    <label style="margin-bottom:12px;font-size:1em;color:var(--azul-oscuro);">Filtros de Historial:</label>
+                    <div class="grid">
+                        <div><label>Mes / Año</label><input type="month" id="f-mes" onchange="filtrarHistorial()"></div>
+                        <div><label>Turno</label><select id="f-turno" onchange="actualizarAulasFiltro();cargarAspirantesFiltro();filtrarHistorial();"><option value="">Ambos</option><option value="TM">Mañana</option><option value="TT">Tarde</option></select></div>
+                        <div><label>Aula</label><select id="f-aula" onchange="cargarAspirantesFiltro();filtrarHistorial();"><option value="">Todas</option></select></div>
+                        <div><label>Aspirante</label><select id="f-asp" onchange="alSeleccionarAspirante()"><option value="">Padrón Completo</option></select></div>
+                    </div>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:16px;padding-top:14px;border-top:1px solid #e2e8f0;">
+                        <button class="btn btn-primary btn-small"  onclick="cargarDatosServicio()">🔄 Refrescar</button>
+                        <button class="btn btn-small" style="background:#0ea5e9;color:white;" onclick="mostrarDetallesAula()">🏫 Padrón/Horario</button>
+                        <button class="btn btn-small" style="background:#8b5cf6;color:white;" onclick="mostrarParteDiario()">📈 Parte Diario</button>
+                        <button class="btn btn-small" style="background:#f59e0b;color:white;" onclick="mostrarReporteSemanal()">📅 Semanal</button>
+                        <button class="btn btn-small" style="background:#10b981;color:white;" onclick="mostrarAsistenciaDocentes()">👨‍🏫 Doc. Ausentes</button>
+                        <button class="btn btn-small" style="background:#334155;color:white;" onclick="mostrarFojaAspirante()">🕵️ Foja</button>
+                        <button class="btn btn-small" style="background:#7c3aed;color:white;" onclick="mostrarHorasCatedra()">📚 Horas Cátedra</button>
+                        <button class="btn btn-small" style="background:#0f766e;color:white;" onclick="exportarReporteOperativo()">📥 Reporte operativo</button>
+                        <button class="btn btn-small" style="background:#475569;color:white;" onclick="imprimirReporteOperativo()">🖨️ Imprimir / PDF</button>
+                    </div>
+                </div>
+                <div id="panel-reportes" style="display:none;margin-bottom:22px;"></div>
+                <h3 class="section-title blue" style="margin-top:6px;">🗂️ Archivo Histórico Operativo</h3>
+                <div id="historial-list"></div>
+            </div>
+
+            <!-- ── PINes ─────────────────────────────────────── -->
+            <div id="admin-pines" class="admin-section">
+                <div class="card" style="border-top:4px solid var(--azul-primario);">
+                    <h3 class="section-title blue">🔑 PINes Operativos Diarios</h3>
+                    <p style="color:var(--texto-suave);margin-bottom:18px;">El Oficial de Servicio debe proporcionar este PIN al Bedel al inicio de cada jornada.</p>
+                    <button class="btn btn-primary btn-small" onclick="cargarPinesOperativos()" style="margin-bottom:22px;">🔄 Generar/Actualizar PINes</button>
+                    <div class="grid">
+                        <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:14px;">
+                            <h4 style="color:var(--azul-primario);border-bottom:2px solid #bae6fd;padding-bottom:8px;margin-top:0;">☀️ Turno Mañana (TM)</h4>
+                            <div class="table-responsive" style="box-shadow:none;border:none;">
+                                <table id="tabla-pines-tm" style="background:transparent;"><thead><tr><th>Aula</th><th>Año</th><th>PIN</th></tr></thead><tbody id="body-pines-tm"></tbody></table>
+                            </div>
+                        </div>
+                        <div style="background:#fff7ed;border:1px solid #ffedd5;border-radius:8px;padding:14px;">
+                            <h4 style="color:#d97706;border-bottom:2px solid #fed7aa;padding-bottom:8px;margin-top:0;">🌇 Turno Tarde (TT)</h4>
+                            <div class="table-responsive" style="box-shadow:none;border:none;">
+                                <table id="tabla-pines-tt" style="background:transparent;"><thead><tr><th>Aula</th><th>Año</th><th>PIN</th></tr></thead><tbody id="body-pines-tt"></tbody></table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ── MONITOR & FIRMAS — con sub-tabs ─────────────── -->
+            <div id="admin-registro" class="admin-section">
+                <div class="sub-nav-container" style="margin-bottom:18px;">
+                    <div class="sub-nav active" onclick="mostrarMonitorTab('mon-aulas-dia',this)">🏫 Aulas del día</div>
+                    <div class="sub-nav"         onclick="mostrarMonitorTab('mon-tiempo-real',this)">📡 Tiempo Real</div>
+                    <div class="sub-nav"         onclick="mostrarMonitorTab('mon-auditoria',this)">🔍 Auditoría Individual</div>
+                    <div class="sub-nav"         onclick="mostrarMonitorTab('mon-inasistencias',this)">❌ Inasistencias</div>
+                </div>
+
+                <div id="mon-aulas-dia" class="admin-section active">
+                    <div class="aulas-dia-header">
+                        <div>
+                            <h2>🏫 Vista operativa de aulas</h2>
+                            <div id="aulas-dia-actualizacion">Preparando tablero…</div>
+                        </div>
+                        <div class="aulas-dia-controles">
+                            <label>Fecha<input type="date" id="aulas-dia-fecha" onchange="cargarAulasDia()"></label>
+                            <label>Turno<select id="aulas-dia-turno" onchange="renderAulasDia()">
+                                <option value="">Todos</option><option value="TM">Mañana</option><option value="TT">Tarde</option>
+                            </select></label>
+                            <label>Estado<select id="aulas-dia-estado" onchange="renderAulasDia()">
+                                <option value="">Todas</option><option value="pendiente">Minuta pendiente</option>
+                                <option value="ausente">Docente ausente informado</option><option value="firmado">Docentes con firma</option>
+                            </select></label>
+                            <button class="btn btn-primary btn-small" onclick="cargarAulasDia()">🔄 Actualizar</button>
+                        </div>
+                    </div>
+                    <div class="aulas-dia-kpis">
+                        <article><span>Aulas activas</span><strong id="aulas-dia-kpi-activas">—</strong></article>
+                        <article><span>Minutas enviadas</span><strong id="aulas-dia-kpi-minutas">—</strong></article>
+                        <article><span>Firmas docentes</span><strong id="aulas-dia-kpi-firmas">—</strong></article>
+                        <article><span>Ausencias informadas</span><strong id="aulas-dia-kpi-ausencias">—</strong></article>
+                    </div>
+                    <div id="aulas-dia-cierres"></div>
+                    <div id="aulas-dia-grid" class="aulas-dia-grid">
+                        <div class="empty-state">Cargando las aulas programadas para hoy…</div>
+                    </div>
+                    <section id="aulas-dia-detalle" class="aulas-dia-detalle" style="display:none;"></section>
+                </div>
+
+                <!-- ── SUB-TAB: TIEMPO REAL (Monitor existente) ──────────── -->
+                <div id="mon-tiempo-real" class="admin-section">
+
+                <!-- Encabezado del monitor -->
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
+                    <div>
+                        <h2 style="margin:0;font-family:'Barlow Condensed',sans-serif;color:var(--azul-oscuro);font-size:1.5em;letter-spacing:.8px;">
+                            📡 MONITOR DE ASISTENCIA EN TIEMPO REAL
+                        </h2>
+                        <div id="monitor-ult-act" style="font-size:.78em;color:var(--texto-tenue);margin-top:3px;font-family:'DM Mono',monospace;">—</div>
+                    </div>
+                    <button id="btn-refrescar" class="btn btn-primary" onclick="refrescarMonitor()" style="padding:11px 22px;">
+                        🔄 Refrescar Monitor
+                    </button>
+                </div>
+
+                <!-- KPIs del turno -->
+                <div class="monitor-kpi-bar">
+                    <div class="monitor-kpi-card monitor-kpi-card--total">
+                        <span class="monitor-kpi-label">Total Aulas</span>
+                        <span class="monitor-kpi-valor" id="kpi-total">—</span>
+                    </div>
+                    <div class="monitor-kpi-card monitor-kpi-card--verde">
+                        <span class="monitor-kpi-label">🟢 Puntuales</span>
+                        <span class="monitor-kpi-valor" id="kpi-puntuales">—</span>
+                    </div>
+                    <div class="monitor-kpi-card monitor-kpi-card--amarillo">
+                        <span class="monitor-kpi-label">🟡 Tardíos</span>
+                        <span class="monitor-kpi-valor" id="kpi-tardios">—</span>
+                    </div>
+                    <div class="monitor-kpi-card monitor-kpi-card--rojo">
+                        <span class="monitor-kpi-label">🔴 Alertas</span>
+                        <span class="monitor-kpi-valor" id="kpi-alertas">—</span>
+                    </div>
+                </div>
+
+                <!-- Leyenda de colores -->
+                <details class="monitor-leyenda">
+                    <summary>ℹ️ ¿Qué significan los colores y estados?</summary>
+                    <div class="leyenda-grid">
+                        <div class="leyenda-item leyenda-verde">
+                            <span class="leyenda-dot">🟢</span>
+                            <div><strong>A TIEMPO</strong><span>El docente firmó <b>dentro de los horarios</b> de su materia (o en los 10 min de tolerancia posteriores).</span></div>
+                        </div>
+                        <div class="leyenda-item leyenda-amarillo">
+                            <span class="leyenda-dot">🟡</span>
+                            <div><strong>TARDÍO</strong><span>El docente firmó <b>después de los 10 minutos</b> de tolerancia de haber terminado su materia.</span></div>
+                        </div>
+                        <div class="leyenda-item leyenda-rojo">
+                            <span class="leyenda-dot">🔴</span>
+                            <div><strong>NO FIRMÓ</strong><span>Pasaron <b>10 minutos de haber finalizado</b> su materia y no hay firma. Posible ausencia.</span></div>
+                        </div>
+                        <div class="leyenda-item leyenda-gris">
+                            <span class="leyenda-dot">⬜</span>
+                            <div><strong>PENDIENTE</strong><span>La clase aún no empezó o está en curso esperando la firma.</span></div>
+                        </div>
+                    </div>
+                </details>
+
+                <!-- Filtros del monitor -->
+                <div class="monitor-filtros">
+                    <div>
+                        <label>Turno</label>
+                        <select id="monitor-filtro-turno">
+                            <option value="">Todos</option>
+                            <option value="TM">Mañana (TM)</option>
+                            <option value="TT">Tarde (TT)</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label>Estado</label>
+                        <select id="monitor-filtro-estado">
+                            <option value="">Todos</option>
+                            <option value="rojo">🔴 Solo Alertas</option>
+                            <option value="pendiente_justif">⏳ Solo Justif. pendientes</option>
+                            <option value="amarillo">🟡 Solo Tardíos</option>
+                            <option value="verde">🟢 Solo Puntuales</option>
+                            <option value="sin-datos">⬜ Sin datos</option>
+                        </select>
+                    </div>
+                    <label class="monitor-switch" title="Oculta bloques cuyo plazo de firma expiró hace más de 45 minutos">
+                        <input type="checkbox" id="monitor-ocultar-finalizados" checked onchange="refrescarMonitor()">
+                        <span class="monitor-switch-slider"></span>
+                        <span class="monitor-switch-label">Ocultar bloques finalizados <small>(+45 min)</small></span>
+                    </label>
+                    <button class="btn btn-secondary btn-small" onclick="refrescarMonitor()">Aplicar filtros</button>
+                </div>
+
+                <!-- Grilla táctica de aulas -->
+                <div id="monitor-firmas">
+                    <div class="empty-state" style="padding:44px;">
+                        <span class="empty-state-icon">📡</span>
+                        <span class="empty-state-text">Presione <strong>Refrescar Monitor</strong> para cargar el estado actual de firmas.</span>
+                    </div>
+                </div>
+
+                <hr class="divider" style="margin:24px 0;">
+
+                <div class="card" style="border-top:4px solid var(--verde-inst);">
+                    <h3 class="section-title green">📋 Registro de Firmas de Presentismo</h3>
+                    <p style="color:var(--texto-suave);margin-bottom:14px;">Registro completo de asistencias confirmadas por PIN, guardado en <code>firmas_docentes</code>.</p>
+                    <div class="reg-filtros">
+                        <div><label>Fecha</label><input type="date" id="reg-fecha"></div>
+                        <div><label>Aula</label><input type="text" id="reg-aula" placeholder="Ej: 17" style="width:80px;"></div>
+                        <div><label>Turno</label><select id="reg-turno"><option value="">Todos</option><option value="TM">TM</option><option value="TT">TT</option></select></div>
+                        <div><label>Docente</label><input type="text" id="reg-docente" placeholder="Nombre o apellido"></div>
+                        <button class="btn btn-info btn-small" style="margin-top:0;" onclick="cargarRegistroFirmasHoy()">🔍 Filtrar</button>
+                        <button class="btn btn-success btn-small" style="margin-top:0;" onclick="exportarFirmasDocentes()">📥 CSV</button>
+                    </div>
+                    <div id="registro-firmas-hoy">
+                        <div class="empty-state" style="padding:28px;"><span class="empty-state-icon">📋</span><span class="empty-state-text">Presione Filtrar para cargar el registro.</span></div>
+                    </div>
+                </div>
+                </div><!-- /mon-tiempo-real -->
+
+                <!-- ── SUB-TAB: AUDITORÍA INDIVIDUAL ─────────────── -->
+                <div id="mon-auditoria" class="admin-section">
+                    <div class="card" style="border-top:4px solid #8b5cf6;">
+                        <h3 class="section-title" style="color:#8b5cf6;border-color:#ddd6fe;">🔍 Auditoría Individual de Asistencia</h3>
+                        <p style="color:var(--texto-suave);margin-bottom:14px;">Busque un docente por <strong>apellido</strong> o <strong>DNI</strong> y revise su legajo completo de asistencias y faltas.</p>
+
+                        <div class="auditoria-search">
+                            <input type="text" id="aud-buscar"
+                                   placeholder="🔍 Buscar docente por apellido o DNI…"
+                                   oninput="_buscarDocenteDebounced()" autocomplete="off">
+                            <div id="aud-sugerencias" class="auditoria-sugerencias"></div>
+                        </div>
+
+                        <div class="auditoria-filtros" id="aud-filtros" style="display:none;">
+                            <div><label>Desde</label><input type="date" id="aud-desde"></div>
+                            <div><label>Hasta</label><input type="date" id="aud-hasta"></div>
+                            <button class="btn btn-primary btn-small" style="margin-top:0;" onclick="auditarDocente()">📊 Aplicar</button>
+                        </div>
+
+                        <div id="aud-resultado"></div>
+                    </div>
+                </div><!-- /mon-auditoria -->
+
+                <!-- ── SUB-TAB: INASISTENCIAS ─────────────────────── -->
+                <div id="mon-inasistencias" class="admin-section">
+                    <div class="card" style="border-top:4px solid var(--peligro-cl);">
+                        <h3 class="section-title red">❌ Registro de Inasistencias — ¿Cuándo Faltó?</h3>
+                        <p style="color:var(--texto-suave);margin-bottom:14px;">Listado consolidado de todos los docentes que no firmaron su clase. Permite justificar en el lugar y exportar el reporte.</p>
+
+                        <div class="inasis-filtros">
+                            <div class="inasis-rango-btns">
+                                <button class="inasis-rango-btn active" onclick="_setRangoInasis(this,'hoy')">Hoy</button>
+                                <button class="inasis-rango-btn" onclick="_setRangoInasis(this,'semana')">Esta Semana</button>
+                                <button class="inasis-rango-btn" onclick="_setRangoInasis(this,'mes')">Mes Actual</button>
+                                <button class="inasis-rango-btn" onclick="_setRangoInasis(this,'custom')">Personalizado</button>
+                            </div>
+                            <div class="inasis-rango-custom" id="inasis-rango-custom" style="display:none;">
+                                <div><label>Desde</label><input type="date" id="inasis-desde"></div>
+                                <div><label>Hasta</label><input type="date" id="inasis-hasta"></div>
+                            </div>
+                            <div class="inasis-otros-filtros">
+                                <div><label>Turno</label><select id="inasis-turno">
+                                    <option value="">Todos</option>
+                                    <option value="TM">Mañana (TM)</option>
+                                    <option value="TT">Tarde (TT)</option>
+                                </select></div>
+                                <label class="monitor-switch" style="margin-bottom:0;">
+                                    <input type="checkbox" id="inasis-incluir-just" onchange="cargarInasistencias()">
+                                    <span class="monitor-switch-slider"></span>
+                                    <span class="monitor-switch-label">Incluir justificadas</span>
+                                </label>
+                                <button class="btn btn-primary btn-small" style="margin-top:0;" onclick="cargarInasistencias()">🔄 Actualizar</button>
+                                <button class="btn btn-success btn-small" style="margin-top:0;" onclick="exportarInasistencias()">📥 Exportar CSV</button>
+                                <button class="btn btn-small" style="margin-top:0;background:#1a3a5c;color:white;" onclick="abrirPartePDF()">🖨️ Parte PDF</button>
+                            </div>
+                        </div>
+
+                        <div id="inasis-resumen" class="inasis-resumen"></div>
+                        <div id="inasis-listado"></div>
+                    </div>
+                </div><!-- /mon-inasistencias -->
+
+            </div><!-- /admin-registro -->
+
+            <!-- ── BASE DE DATOS ──────────────────────────────── -->
+            <!-- ── CONFIGURACIÓN ──────────────────────────────── -->
+            <div id="admin-config" class="admin-section">
+                <div class="sub-nav-container" style="margin-bottom:18px;">
+                    <div class="sub-nav"         onclick="mostrarCfgTab('cfg-aulas',this)">🏫 Catálogo de Aulas</div>
+                <div class="sub-nav"         onclick="mostrarCfgTab('cfg-novedades',this)">📝 Novedades por Horas Cátedra Config</div>
+                <div class="sub-nav"         onclick="mostrarCfgTab('cfg-pgnp',this)">👨‍🏫 Cuentas PGNP</div>
+                <div class="sub-nav active" onclick="mostrarCfgTab('cfg-cronograma',this)">📁 Cargar Cronograma</div>
+                    <div class="sub-nav"         onclick="mostrarCfgTab('cfg-padron',this)">📊 Cargar Padrón</div>
+                    <div class="sub-nav"         onclick="mostrarCfgTab('cfg-seguridad',this)">🔑 Seguridad / PINes</div>
+                    <div class="sub-nav"         onclick="mostrarCfgTab('cfg-parametros',this)">⚙️ Parámetros</div>
+                    <div class="sub-nav"         onclick="mostrarCfgTab('cfg-cuentas',this)">👥 Cuentas Admin</div>
+                    <div class="sub-nav"         onclick="mostrarCfgTab('cfg-archivo',this)">📚 Archivo Histórico</div>
+                    <div class="sub-nav"         onclick="mostrarCfgTab('cfg-dashboard',this)">📊 Dashboard</div>
+                    <div class="sub-nav"         onclick="mostrarCfgTab('cfg-ubicaciones',this)">📍 Ubicaciones de firmas</div>
+                    <div class="sub-nav"         onclick="mostrarCfgTab('cfg-auditoria',this)">🛡️ Auditoría</div>
+                    <div class="sub-nav"         onclick="mostrarCfgTab('cfg-salud',this)">❤️ Salud</div>
+                    <div class="sub-nav"         onclick="mostrarCfgTab('cfg-sesiones',this)">👀 Sesiones</div>
+                    <div class="sub-nav"         onclick="mostrarCfgTab('cfg-limpieza',this)">🧹 Limpieza</div>
+                    <div class="sub-nav"         onclick="mostrarCfgTab('cfg-vistas',this)">📺 Vistas TV</div>
+                    <div class="sub-nav"         onclick="mostrarCfgTab('cfg-versiones',this)">⏪ Versiones</div>
+                    <div class="sub-nav"         onclick="mostrarCfgTab('cfg-sql',this)">💻 SQL</div>
+                    <div class="sub-nav"         onclick="mostrarCfgTab('cfg-telegram',this)">📱 Telegram</div>
+                    <div class="sub-nav sub-nav-peligro" onclick="mostrarCfgTab('cfg-peligro',this)">🚨 Peligro</div>
+                    <div class="sub-nav"         onclick="mostrarCfgTab('cfg-bd',this)">🔌 Base de Datos</div>
+                </div>
+                <div class="su-banner">
+                    <strong>🛡️ PANEL DE INFRAESTRUCTURA — SÚPER USUARIO</strong>
+                    <span>Las acciones en este módulo alteran la estructura de datos de la Escuela.</span>
+                </div>
+                <div id="cfg-aulas" class="admin-section">
+                    <div class="card" style="border-top:4px solid var(--verde-inst);">
+                        <h3 class="section-title">🏫 Aulas, especialidades y cursos</h3>
+                        <p style="color:var(--texto-suave);font-size:.9em;">
+                            Catálogo oficial 2026. La aplicación usa esta identificación al validar el PIN,
+                            mostrar el aula y asociar los cronogramas importados.
+                        </p>
+                        <div class="grid" style="align-items:flex-end;">
+                            <div><label>Turno</label><select id="catalogo-turno" onchange="cargarCatalogoAulas()">
+                                <option value="">Todos</option><option value="TM">Turno Mañana</option>
+                                <option value="TT">Turno Tarde</option>
+                            </select></div>
+                            <div><label>Buscar</label><input id="catalogo-busqueda" type="search"
+                                placeholder="Aula, curso o especialidad" oninput="cargarCatalogoAulas()"></div>
+                        </div>
+                        <div class="table-responsive" style="margin-top:14px;">
+                            <table><thead><tr><th>Turno</th><th>Aula</th><th>Nombre</th><th>Año</th><th>Especialidad</th><th>Curso</th><th>Acción</th></tr></thead>
+                            <tbody id="body-catalogo-aulas"><tr><td colspan="6">Cargando…</td></tr></tbody></table>
+                        </div>
+                    </div>
+                </div>
+                <div id="cfg-novedades" class="admin-section">
+                    <div class="card" style="border-top:4px solid #7c3aed;">
+                        <h3 class="section-title" style="color:#6d28d9;">📝 Registro de Novedades y Justificación de Carga Horaria Cátedra</h3>
+                        <p style="color:var(--texto-suave);font-size:.9em;">
+                            Defina qué causales pueden justificarse. La configuración se aplica a los nuevos registros;
+                            los históricos conservan su clasificación original.
+                        </p>
+                        <div class="grid" style="align-items:end;">
+                            <div><label>Nombre</label><input id="novedad-nombre" maxlength="80" placeholder="Ej.: SANIDAD"></div>
+                            <div><label>Permite justificación</label><select id="novedad-permite"><option value="true">Sí</option><option value="false">No</option></select></div>
+                            <div><label>Por defecto</label><select id="novedad-defecto"><option value="">Sin valor</option><option value="true">Justificada</option><option value="false">No justificada</option></select></div>
+                            <div><button class="btn btn-primary" onclick="crearTipoNovedad()">➕ Agregar</button></div>
+                        </div>
+                        <div class="table-responsive" style="margin-top:16px;">
+                            <table><thead><tr><th>Nombre</th><th>Permite</th><th>Por defecto</th><th>Estado</th><th>Acciones</th></tr></thead>
+                            <tbody id="body-tipos-novedad"><tr><td colspan="5">Cargando…</td></tr></tbody></table>
+                        </div>
+                    </div>
+                </div>
+                <div id="cfg-pgnp" class="admin-section">
+                    <div class="card" style="border-top:4px solid #7c3aed;">
+                        <h3 class="section-title" style="color:#6d28d9;border-color:#ddd6fe;">👨‍🏫 Habilitar cuentas de PGNP</h3>
+                        <p style="color:var(--texto-suave);font-size:.9em;">
+                            TIC debe habilitar cada cuenta. Solo las cuentas marcadas podrán recibir y firmar coberturas.
+                            El PGNP debe crear primero una cuenta docente con sus datos reales.
+                        </p>
+                        <div id="cuentas-pgnp-lista"><div class="empty-state">Cargando cuentas…</div></div>
+                    </div>
+                </div>
+                <div id="cfg-padron" class="admin-section">
+                    <div class="card" style="border-top:4px solid var(--exito-cl);">
+                        <h3 style="color:var(--azul-oscuro);margin-top:0;">Incorporación de Padrón Oficial</h3>
+                        <p style="color:var(--texto-suave);margin-bottom:18px;">Formato <b>.xlsx, .xls o .csv</b>. Columnas requeridas: <strong>AULA</strong>, <strong>NOMBRE</strong> (opcional: <strong>GRADO</strong>).</p>
+                        <div class="grid" style="align-items:flex-end;">
+                            <div><label>Turno</label><select id="excel-turno"><option value="TM">Turno Mañana (TM)</option><option value="TT">Turno Tarde (TT)</option></select></div>
+                            <div><label>Archivo Excel / CSV</label><input type="file" id="excel-file" accept=".xlsx,.xls,.csv"></div>
+                        </div>
+                        <button class="btn btn-success btn-full" style="margin-top:18px;font-size:1.05em;" onclick="subirPadron()">📥 Procesar e Importar Padrón</button>
+                    </div>
+
+                    <div class="card">
+                        <h3 class="section-title">✏️ Edición Manual de Padrón</h3>
+                        <p style="color:var(--texto-suave);font-size:.88em;margin-top:-6px;margin-bottom:14px;">Cargue o ajuste manualmente el padrón de aspirantes de un aula. Esta operación reemplaza el padrón existente para esa Aula + Turno.</p>
+                        <div class="grid">
+                            <div><label>Aula</label><input type="text" id="p-aula" placeholder="Ej: 17" onblur="cargarPadronParaEditar()"></div>
+                            <div><label>Turno</label><select id="p-turno" onchange="cargarPadronParaEditar()"><option value="TM">Mañana (TM)</option><option value="TT">Tarde (TT)</option></select></div>
+                        </div>
+                        <div class="table-responsive">
+                            <table id="tabla-padron"><thead><tr><th>Grado</th><th>Nombre</th><th></th></tr></thead><tbody id="body-padron"></tbody></table>
+                        </div>
+                        <div style="display:flex;justify-content:space-between;margin-top:16px;flex-wrap:wrap;gap:12px;">
+                            <button class="btn btn-dark btn-small" onclick="addPadronRow()">+ Añadir Aspirante</button>
+                            <button class="btn btn-success" onclick="guardarPadronManual()">💾 Registrar Padrón</button>
+                        </div>
+                    </div>
+                </div>
+                <div id="cfg-cronograma" class="admin-section active">
+                    <div class="card" style="border-top:4px solid var(--azul-primario);">
+                        <h3 style="color:var(--azul-oscuro);margin-top:0;">Extracción de Horarios desde Word</h3>
+                        <p style="color:var(--texto-suave);margin-bottom:18px;">Suba el horario oficial en <b>.docx</b>. El parser reconoce grados militares, horas en formato 0720-0820 y normaliza variantes de nombres.</p>
+                        <div class="grid" style="align-items:flex-end;">
+                            <div><label>Turno</label><select id="word-turno"><option value="TM">Turno Mañana (TM)</option><option value="TT">Turno Tarde (TT)</option></select></div>
+                            <div><label>Archivo Word (.docx)</label><input type="file" id="word-file" accept=".docx"></div>
+                        </div>
+                        <button class="btn btn-primary btn-full" style="margin-top:18px;font-size:1.05em;" onclick="subirWord()">📤 Extraer Cronograma</button>
+                    </div>
+                    <div id="word-resultado"></div>
+                    <div class="card">
+                        <h3 class="section-title">✏️ Edición Manual de Cuadrícula</h3>
+                        <div class="grid">
+                            <div><label>Aula registrada</label><select id="c-aula" onchange="cargarConfigParaEditar()"><option value="">Cargando aulas…</option></select></div>
+                            <div><label>Turno</label><select id="c-turno" onchange="cargarAulasCronograma()"><option value="TM">Mañana (TM)</option><option value="TT">Tarde (TT)</option></select></div>
+                        </div>
+                        <div class="table-responsive">
+                            <table id="tabla-config"><thead><tr><th>Día</th><th>Horario</th><th>Asignatura</th><th>Docente</th><th></th></tr></thead><tbody id="body-config"></tbody></table>
+                        </div>
+                        <div style="display:flex;justify-content:space-between;margin-top:16px;flex-wrap:wrap;gap:12px;">
+                            <button class="btn btn-dark btn-small" onclick="addConfigRow()">+ Añadir Bloque</button>
+                            <button class="btn btn-success" onclick="guardarCronogramaManual()">💾 Registrar Cuadrícula</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- SUB-TAB: BASE DE DATOS -->
+                <div id="cfg-bd" class="admin-section">
+
+                    <!-- Conexión a base de datos remota -->
+                    <div class="card" style="border-top:4px solid #6366f1;">
+                        <h3 class="section-title" style="color:#6366f1;border-color:#c7d2fe;">🌐 Conexión a Servidor PostgreSQL</h3>
+                        <p style="color:var(--texto-suave);margin-bottom:14px;">Configure los datos para conectarse a una base de datos PostgreSQL distinta (ej. el servidor de SANCHEZ <code>10.204.36.4</code>).</p>
+                        <div id="conexion-actual" style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;padding:10px 14px;margin-bottom:18px;font-size:.88em;color:var(--texto-suave);">
+                            Cargando conexión actual…
+                        </div>
+                        <div class="grid">
+                            <div><label>Host / IP</label><input type="text" id="db-host" placeholder="10.204.36.4"></div>
+                            <div><label>Puerto</label><input type="text" id="db-port" placeholder="5432" value="5432"></div>
+                            <div><label>Base de Datos</label><input type="text" id="db-name" placeholder="postgres"></div>
+                            <div><label>Usuario</label><input type="text" id="db-user" placeholder="franco"></div>
+                            <div style="grid-column:1 / -1;"><label>Contraseña</label><input type="password" id="db-pass" placeholder="••••••••"></div>
+                        </div>
+                        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:16px;">
+                            <button class="btn btn-info btn-small"      onclick="probarConexionRemota()">🔍 Probar Conexión</button>
+                            <button class="btn btn-primary btn-small"   onclick="guardarConexionRemota()">💾 Guardar y Conectar</button>
+                            <button class="btn btn-secondary btn-small" style="margin-left:auto;" onclick="restaurarConexionDefault()">↩️ Volver al Original</button>
+                        </div>
+                        <div id="db-test-result" style="margin-top:14px;"></div>
+                    </div>
+
+                    <div class="card" style="border-top:4px solid #0ea5e9;">
+                        <h3 class="section-title" style="color:#0ea5e9;border-color:#bae6fd;">🔌 Diagnóstico de Base de Datos</h3>
+                        <p style="color:var(--texto-suave);margin-bottom:18px;">Verifique el estado de PostgreSQL y las <strong>17 tablas operativas</strong> del sistema (+ 2 de archivo si existen).</p>
+                        <div class="bd-actions">
+                            <button id="btn-verificar-bd" class="btn btn-primary" onclick="verificarConexionBD()">🔌 Verificar Conexión</button>
+                            <button id="btn-init-tablas"  class="btn btn-info"    onclick="inicializarTablas()">🗄️ Inicializar Tablas</button>
+                        </div>
+                        <div id="bd-status">
+                            <div style="text-align:center;padding:28px;color:var(--texto-tenue);">Presione <strong>Verificar Conexión</strong>.</div>
+                        </div>
+                        <hr class="divider" style="margin:18px 0;">
+                        <h4 style="color:var(--azul-oscuro);margin:0 0 12px;font-family:'Barlow Condensed',sans-serif;">ℹ️ Tablas del Sistema (17 operativas + 2 al archivar)</h4>
+
+                        <h5 style="color:var(--texto-suave);font-size:.78em;text-transform:uppercase;letter-spacing:.7px;margin:14px 0 7px;">📚 Datos académicos</h5>
+                        <div class="tablas-grid">
+                            <div class="tabla-card"><div class="tabla-nombre">cronograma_maestro</div><div class="tabla-desc">Horarios por aula y turno</div></div>
+                            <div class="tabla-card"><div class="tabla-nombre">cronograma_versiones</div><div class="tabla-desc">Historial de versiones del cronograma</div></div>
+                            <div class="tabla-card"><div class="tabla-nombre">aspirantes</div><div class="tabla-desc">Padrón por aula</div></div>
+                            <div class="tabla-card"><div class="tabla-nombre">docentes</div><div class="tabla-desc">Cuentas de profesores</div></div>
+                        </div>
+
+                        <h5 style="color:var(--texto-suave);font-size:.78em;text-transform:uppercase;letter-spacing:.7px;margin:14px 0 7px;">📋 Operatividad diaria</h5>
+                        <div class="tablas-grid">
+                            <div class="tabla-card tabla-card--op"><div class="tabla-nombre">minutas</div><div class="tabla-desc">Partes diarios de bedelía</div></div>
+                            <div class="tabla-card tabla-card--op"><div class="tabla-nombre">firmas_docentes</div><div class="tabla-desc">Presentismo docente por PIN</div></div>
+                            <div class="tabla-card tabla-card--op"><div class="tabla-nombre">justificaciones_ausencia</div><div class="tabla-desc">Justificaciones por ausencias</div></div>
+                            <div class="tabla-card tabla-card--op"><div class="tabla-nombre">pin_overrides</div><div class="tabla-desc">PINes blanqueados manualmente</div></div>
+                        </div>
+
+                        <h5 style="color:var(--texto-suave);font-size:.78em;text-transform:uppercase;letter-spacing:.7px;margin:14px 0 7px;">🔒 Seguridad y auditoría</h5>
+                        <div class="tablas-grid">
+                            <div class="tabla-card tabla-card--sec"><div class="tabla-nombre">usuarios_admin</div><div class="tabla-desc">Cuentas de Plana Mayor</div></div>
+                            <div class="tabla-card tabla-card--sec"><div class="tabla-nombre">audit_log</div><div class="tabla-desc">Trazabilidad de acciones</div></div>
+                            <div class="tabla-card tabla-card--sec"><div class="tabla-nombre">failed_logins</div><div class="tabla-desc">Intentos de acceso fallidos</div></div>
+                            <div class="tabla-card tabla-card--sec"><div class="tabla-nombre">system_log</div><div class="tabla-desc">Errores y eventos del motor</div></div>
+                        </div>
+
+                        <h5 style="color:var(--texto-suave);font-size:.78em;text-transform:uppercase;letter-spacing:.7px;margin:14px 0 7px;">⚙️ Configuración</h5>
+                        <div class="tablas-grid">
+                            <div class="tabla-card tabla-card--cfg"><div class="tabla-nombre">config_sistema</div><div class="tabla-desc">Parámetros operativos (tolerancias, mantenimiento, backup hora)</div></div>
+                        </div>
+
+                        <h5 style="color:var(--texto-suave);font-size:.78em;text-transform:uppercase;letter-spacing:.7px;margin:14px 0 7px;">🤖 Telegram / Bot</h5>
+                        <div class="tablas-grid">
+                            <div class="tabla-card tabla-card--tg"><div class="tabla-nombre">bedeles_telegram</div><div class="tabla-desc">Bedeles vinculados al bot</div></div>
+                            <div class="tabla-card tabla-card--tg"><div class="tabla-nombre">bedel_link_tokens</div><div class="tabla-desc">Tokens de vinculación del bot</div></div>
+                            <div class="tabla-card tabla-card--tg"><div class="tabla-nombre">recordatorios_telegram</div><div class="tabla-desc">Recordatorios programados</div></div>
+                            <div class="tabla-card tabla-card--tg"><div class="tabla-nombre">bot_comando_log</div><div class="tabla-desc">Registro de comandos del bot</div></div>
+                        </div>
+
+                        <h5 style="color:var(--texto-suave);font-size:.78em;text-transform:uppercase;letter-spacing:.7px;margin:14px 0 7px;">📦 Archivado (se crean al archivar primer ciclo)</h5>
+                        <div class="tablas-grid">
+                            <div class="tabla-card tabla-card--arc"><div class="tabla-nombre">minutas_archivo</div><div class="tabla-desc">Partes de ciclos cerrados (solo lectura)</div></div>
+                            <div class="tabla-card tabla-card--arc"><div class="tabla-nombre">firmas_archivo</div><div class="tabla-desc">Firmas de ciclos cerrados</div></div>
+                        </div>
+                    </div>
+
+                </div><!-- /cfg-bd -->
+
+                <!-- SUB-TAB: SEGURIDAD / PINes ─────────────────── -->
+                <div id="cfg-seguridad" class="admin-section">
+                    <div class="card" style="border-top:4px solid #6366f1;">
+                        <h3 class="section-title" style="color:#6366f1;border-color:#c7d2fe;">🔑 Seguridad — Auditoría y Blanqueo de PINes</h3>
+                        <p style="color:var(--texto-suave);margin-bottom:14px;">Visualice los PINes diarios calculados por hash, o genere un PIN nuevo aleatorio cuando un Bedel/Docente quede bloqueado.</p>
+                        <button class="btn btn-primary btn-small" onclick="cargarMapaPines()">🔄 Cargar Mapa de PINes de HOY</button>
+                        <div id="su-pines-tabla" style="margin-top:14px;"></div>
+                    </div>
+
+                    <div class="card" style="border-top:4px solid #f59e0b;">
+                        <h3 class="section-title" style="color:#d97706;border-color:#fed7aa;">👥 Gestión de Cuentas Docentes</h3>
+                        <p style="color:var(--texto-suave);margin-bottom:14px;">Resetee el password de cualquier docente si lo solicita formalmente.</p>
+                        <button class="btn btn-primary btn-small" onclick="cargarDocentesParaReset()">🔄 Listar Docentes Registrados</button>
+                        <div id="su-docentes-lista" style="margin-top:14px;"></div>
+                    </div>
+
+                    <div class="card" style="border-top:4px solid var(--peligro-cl);">
+                        <h3 class="section-title red">🔒 Revocar Sesiones Activas</h3>
+                        <p style="color:var(--texto-suave);margin-bottom:14px;">Forzar el cierre de todas las sesiones activas de Plana Mayor (no afecta tu sesión TIC).</p>
+                        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                            <button class="btn btn-warning btn-small" onclick="revocarTokens('admin')">🚪 Cerrar TODAS las sesiones de Plana Mayor</button>
+                            <button class="btn btn-danger btn-small" onclick="revocarTokens('all')">🚪 Cerrar TODO (Admin + otras sesiones TIC)</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- SUB-TAB: PARÁMETROS ─────────────────── -->
+                <div id="cfg-parametros" class="admin-section">
+                    <div class="card" style="border-top:4px solid #f59e0b;">
+                        <h3 class="section-title" style="color:#d97706;border-color:#fed7aa;">⚙️ Parámetros del Sistema</h3>
+                        <p style="color:var(--texto-suave);margin-bottom:14px;">Ajuste las ventanas de tolerancia y los plazos administrativos sin tocar el código.</p>
+                        <div id="su-params-form">
+                            <p style="text-align:center;color:var(--texto-tenue);padding:20px;"><span class="spin">🔄</span> Cargando…</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- SUB-TAB: CUENTAS ADMIN + IMPERSONACIÓN ─────────── -->
+                <div id="cfg-cuentas" class="admin-section">
+                    <div class="card" style="border-top:4px solid #0ea5e9;">
+                        <h3 class="section-title" style="color:#0ea5e9;border-color:#bae6fd;">👥 Cuentas de Plana Mayor</h3>
+                        <p style="color:var(--texto-suave);margin-bottom:14px;">Gestión de oficiales autorizados a operar el Monitor Táctico.</p>
+
+                        <div class="grid" style="background:#f8fafc;padding:13px;border-radius:8px;align-items:end;">
+                            <div><label>Usuario</label><input type="text" id="ua-usuario" placeholder="oficial.lopez"></div>
+                            <div><label>Nombre completo</label><input type="text" id="ua-nombre" placeholder="Sgto. López J."></div>
+                            <div><label>Password inicial (opcional)</label><input type="text" id="ua-password" placeholder="(autogenerar)"></div>
+                        </div>
+                        <button class="btn btn-success btn-small" style="margin-top:11px;" onclick="crearUsuarioAdmin()">➕ Crear Cuenta</button>
+
+                        <button class="btn btn-primary btn-small" style="margin-top:14px;" onclick="cargarUsuariosAdmin()">🔄 Listar Cuentas</button>
+                        <div id="ua-tabla" style="margin-top:12px;"></div>
+                    </div>
+
+                    <div class="card" style="border-top:4px solid #a855f7;">
+                        <h3 class="section-title" style="color:#a855f7;border-color:#e9d5ff;">🎭 Impersonación Temporal (Modo Dios)</h3>
+                        <p style="color:var(--texto-suave);margin-bottom:14px;"><strong>⚠️ Solo para depurar.</strong> Inicia una sesión temporal (30 min) "como si fuera" otra cuenta. Todo queda registrado en el Audit Log.</p>
+
+                        <div class="grid" style="align-items:end;">
+                            <div><label>Rol a imitar</label>
+                                <select id="imp-rol">
+                                    <option value="docente">Docente</option>
+                                    <option value="admin">Plana Mayor</option>
+                                </select>
+                            </div>
+                            <div><label>Identificador (email/usuario)</label><input type="text" id="imp-sujeto" placeholder="email del docente o usuario admin"></div>
+                            <div style="grid-column:1/-1;"><label>Motivo (queda auditado)</label><input type="text" id="imp-motivo" placeholder="Ej: Reproducir error que reporta el docente con su clave"></div>
+                        </div>
+                        <button class="btn btn-warning btn-small" style="margin-top:11px;" onclick="iniciarImpersonacion()">🎭 Iniciar Impersonación</button>
+                        <div id="imp-result" style="margin-top:14px;"></div>
+                    </div>
+                </div>
+
+                <!-- SUB-TAB: ARCHIVO HISTÓRICO DE CICLOS CERRADOS ─── -->
+                <div id="cfg-archivo" class="admin-section">
+                    <div class="card" style="border-top:4px solid #7c3aed;">
+                        <h3 class="section-title" style="color:#7c3aed;border-color:#ddd6fe;">📚 Archivo Histórico de Ciclos Cerrados</h3>
+                        <p style="color:var(--texto-suave);margin-bottom:14px;">
+                            Consulte minutas y firmas de ciclos lectivos archivados.
+                            Estas tablas son <strong>solo de lectura</strong> — se crean automáticamente
+                            al archivar un ciclo desde <em>Peligro → Archivar Año</em>.
+                        </p>
+
+                        <div id="archivo-resumen" style="margin-bottom:14px;"></div>
+
+                        <div class="archivo-filtros">
+                            <div><label>Tipo</label>
+                                <select id="arch-tipo" onchange="consultarArchivo()">
+                                    <option value="minutas">Minutas</option>
+                                    <option value="firmas">Firmas docentes</option>
+                                </select>
+                            </div>
+                            <div><label>Año</label>
+                                <select id="arch-anio" onchange="consultarArchivo()">
+                                    <option value="">Todos</option>
+                                </select>
+                            </div>
+                            <div><label>Aula</label>
+                                <input type="text" id="arch-aula" placeholder="Ej: 17" style="width:80px;">
+                            </div>
+                            <div><label>Turno</label>
+                                <select id="arch-turno">
+                                    <option value="">Todos</option>
+                                    <option value="TM">TM</option>
+                                    <option value="TT">TT</option>
+                                </select>
+                            </div>
+                            <div id="arch-docente-wrap" style="display:none;"><label>Docente</label>
+                                <input type="text" id="arch-docente" placeholder="Apellido (parcial)">
+                            </div>
+                            <button class="btn btn-primary btn-small" style="margin-top:0;" onclick="consultarArchivo()">🔍 Consultar</button>
+                            <button class="btn btn-success btn-small" style="margin-top:0;" onclick="exportarArchivo()">📥 Exportar CSV</button>
+                        </div>
+
+                        <div id="archivo-resultado" style="margin-top:14px;"></div>
+                    </div>
+                </div>
+
+                <!-- SUB-TAB: DASHBOARD ───────────────── -->
+                <div id="cfg-dashboard" class="admin-section">
+                    <div class="card" style="border-top:4px solid #3b82f6;">
+                        <h3 class="section-title" style="color:#1e6fa8;border-color:#bfdbfe;">📊 Dashboard Operativo</h3>
+                        <p style="color:var(--texto-suave);margin-bottom:8px;">Vista 360° del sistema con KPIs en tiempo real y tendencias.</p>
+                        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px;">
+                            <label style="color:var(--texto-suave);font-size:.85em;">Rango:</label>
+                            <select id="dash-rango" onchange="cargarDashboardSU()" style="padding:5px 10px;border-radius:8px;background:var(--bg-input);color:var(--texto);border:1px solid var(--borde);">
+                                <option value="7" selected>7 dias</option>
+                                <option value="14">14 dias</option>
+                                <option value="30">30 dias</option>
+                                <option value="90">Trimestre</option>
+                                <option value="365">Anual</option>
+                            </select>
+                            <button class="btn btn-primary btn-small" onclick="cargarDashboardSU()">🔄 Actualizar</button>
+                            <button class="btn btn-success btn-small" onclick="exportarDashboardSU()">📊 Excel (CSV)</button>
+                            <button class="btn btn-info btn-small" onclick="imprimirDashboardSU()">📄 Descargar PDF</button>
+                            <span id="dash-comparacion" style="font-size:.82em;margin-left:auto;"></span>
+                        </div>
+                        <div class="dash-kpis" id="dash-kpis"></div>
+                        <div id="dash-resumen-ejecutivo" style="margin:12px 0 0;"></div>
+                        <div id="dash-alertas-geo" style="margin:12px 0;"></div>
+                        <div class="dash-grid">
+                            <div class="dash-chart-card">
+                                <h4 id="dash-titulo-firmas">📈 Firmas registradas</h4>
+                                <canvas id="chart-firmas" height="180"></canvas>
+                            </div>
+                            <div class="dash-chart-card">
+                                <h4 id="dash-titulo-audit">🛡️ Actividad de auditoria</h4>
+                                <canvas id="chart-audit" height="180"></canvas>
+                            </div>
+                            <div class="dash-chart-card">
+                                <h4>📉 Top 10 docentes con mas justificaciones</h4>
+                                <canvas id="chart-ausentes" height="220"></canvas>
+                            </div>
+                            <div class="dash-chart-card">
+                                <h4>🎭 Distribucion de acciones por rol</h4>
+                                <canvas id="chart-roles" height="220"></canvas>
+                            </div>
+                        </div>
+                        <div id="dash-generado" style="text-align:right;font-size:.78em;color:var(--texto-tenue);margin-top:14px;"></div>
+                    </div>
+                </div>
+
+                <div id="cfg-ubicaciones" class="admin-section">
+                    <div class="card" style="border-top:4px solid #0ea5e9;">
+                        <h3 class="section-title" style="color:#0369a1;border-color:#bae6fd;">📍 Ubicación de firmas docentes</h3>
+                        <p style="color:var(--texto-suave);font-size:.9em;">
+                            Consulta restringida a TIC. Muestra las coordenadas que el navegador adjuntó al firmar y permite abrirlas en un mapa.
+                            La ubicación es opcional: si el docente no otorgó permiso o el dispositivo no pudo obtenerla, se indicará como no disponible.
+                        </p>
+                        <div class="grid" style="align-items:end;">
+                            <div><label for="geo-firmas-desde">Desde</label><input type="date" id="geo-firmas-desde"></div>
+                            <div><label for="geo-firmas-hasta">Hasta</label><input type="date" id="geo-firmas-hasta"></div>
+                            <div><label for="geo-firmas-aula">Aula</label><input id="geo-firmas-aula" maxlength="50" placeholder="Todas"></div>
+                            <div><label for="geo-firmas-turno">Turno</label><select id="geo-firmas-turno">
+                                <option value="">Todos</option><option value="TM">Mañana (TM)</option><option value="TT">Tarde (TT)</option>
+                            </select></div>
+                            <div><label for="geo-firmas-docente">Docente</label><input id="geo-firmas-docente" maxlength="150" placeholder="Buscar nombre"></div>
+                            <div><button class="btn btn-primary" onclick="cargarUbicacionesFirmasTIC()">🔍 Consultar</button></div>
+                        </div>
+                        <div id="geo-firmas-resultados" style="margin-top:16px;">
+                            <div class="empty-state"><span class="empty-state-icon">📍</span><span class="empty-state-text">Seleccione el rango y presione Consultar.</span></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- SUB-TAB: AUDITORÍA Y LOGS ─────────── -->
+                <div id="cfg-auditoria" class="admin-section">
+                    <div class="card" style="border-top:4px solid #0d9488;">
+                        <h3 class="section-title" style="color:#0d9488;border-color:#99f6e4;">🛡️ Auditoría & Logs de Trazabilidad</h3>
+                        <p style="color:var(--texto-suave);margin-bottom:14px;">Bitácora de eventos del sistema para control institucional.</p>
+
+                        <div class="sub-nav-container" style="margin-bottom:14px;">
+                            <div class="sub-nav active" onclick="_mostrarLogTab('log-audit',this)">📜 Audit Log</div>
+                            <div class="sub-nav"        onclick="_mostrarLogTab('log-failed',this)">🚫 Logins Fallidos</div>
+                            <div class="sub-nav"        onclick="_mostrarLogTab('log-system',this)">⚠️ Errores Sistema</div>
+                        </div>
+
+                        <div id="log-audit" class="log-section active">
+                            <button class="btn btn-primary btn-small" onclick="cargarAuditLog()">🔄 Recargar Audit Log</button>
+                            <div id="audit-log-tabla" style="margin-top:12px;"></div>
+                        </div>
+                        <div id="log-failed" class="log-section">
+                            <button class="btn btn-primary btn-small" onclick="cargarFailedLogins()">🔄 Recargar Logins Fallidos</button>
+                            <div id="failed-log-tabla" style="margin-top:12px;"></div>
+                        </div>
+                        <div id="log-system" class="log-section">
+                            <button class="btn btn-primary btn-small" onclick="cargarSystemLog()">🔄 Recargar Errores</button>
+                            <div id="system-log-tabla" style="margin-top:12px;"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- SUB-TAB: VISTAS PUBLICAS (Bloque TIC 4) ─────────── -->
+                <div id="cfg-vistas" class="admin-section">
+                    <div class="card" style="border-top:4px solid #3b82f6;">
+                        <h3 class="section-title" style="color:#1d4ed8;border-color:#bfdbfe;">
+                            📺 Vistas Públicas
+                        </h3>
+                        <p style="color:var(--texto-suave);margin-bottom:18px;">
+                            Páginas standalone listas para abrirse en otras pantallas o compartir con superioridad.
+                        </p>
+
+                        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px;">
+                            <div class="card" style="background:linear-gradient(135deg,#0a1626,#1a2536);color:white;border:none;margin:0;">
+                                <h4 style="color:#3b8fc8;margin-top:0;">📺 Dashboard TV</h4>
+                                <p style="color:#94a3b8;font-size:.88em;margin-bottom:14px;">
+                                    Vista fullscreen pensada para una TV de la oficina. KPIs grandes, grid de aulas, ticker de firmas en vivo. Auto-refresh 30s.
+                                </p>
+                                <ul style="color:#cbd5e1;font-size:.85em;padding-left:22px;margin-bottom:14px;">
+                                    <li>Sin auth (no contiene datos sensibles)</li>
+                                    <li>Reloj + fecha en vivo</li>
+                                    <li>Sparkline de tendencia semanal</li>
+                                </ul>
+                                <a href="/tv" target="_blank" rel="noopener" class="btn btn-primary" style="display:inline-block;text-decoration:none;">
+                                    🚀 Abrir en pestaña nueva
+                                </a>
+                                <button class="btn btn-secondary btn-small" style="margin-left:8px;" onclick="copiarUrl('/tv')">📋 Copiar URL</button>
+                            </div>
+
+                            <div class="card" style="background:#f0fdf4;border-left:4px solid #16a34a;margin:0;">
+                                <h4 style="color:#15803d;margin-top:0;">🟢 Status Público</h4>
+                                <p style="color:var(--texto-suave);font-size:.88em;margin-bottom:14px;">
+                                    Página de estado tipo "status.github.com". Muestra si los servicios están activos sin datos sensibles. Útil para mostrar transparencia operativa.
+                                </p>
+                                <ul style="color:var(--texto);font-size:.85em;padding-left:22px;margin-bottom:14px;">
+                                    <li>SIN auth (acceso público)</li>
+                                    <li>Estado de Web, DB, Bot, Scheduler</li>
+                                    <li>Latencia, uptime, errores 7d</li>
+                                </ul>
+                                <a href="/status" target="_blank" rel="noopener" class="btn btn-primary" style="display:inline-block;text-decoration:none;">
+                                    🚀 Abrir en pestaña nueva
+                                </a>
+                                <button class="btn btn-secondary btn-small" style="margin-left:8px;" onclick="copiarUrl('/status')">📋 Copiar URL</button>
+                            </div>
+                        </div>
+
+                        <div class="nota-info" style="margin-top:18px;">
+                            💡 <b>Tip:</b> En el TV de la oficina abrí <code>/tv</code> en kiosko (F11 para fullscreen).
+                            Para compartir el status con superioridad, mandales el link <code>/status</code> — no requiere usuarios.
+                        </div>
+                    </div>
+                </div>
+
+                <!-- SUB-TAB: LIMPIEZA (Bloque TIC 3) ─────────── -->
+                <div id="cfg-limpieza" class="admin-section">
+                    <div class="card" style="border-top:4px solid #8b5cf6;">
+                        <h3 class="section-title" style="color:#7c3aed;border-color:#ddd6fe;">
+                            🧹 Detector de Duplicados y Limpieza de Huérfanos
+                        </h3>
+                        <p style="color:var(--texto-suave);margin-bottom:14px;">
+                        Revisá duplicados, vinculá nombres del cronograma con cuentas docentes verificando DNI/email,
+                        y limpiá únicamente datos técnicos vencidos.
+                        </p>
+                        <button class="btn btn-primary" onclick="analizarSaludDB()">🔍 Analizar base de datos</button>
+                    </div>
+
+                    <!-- Sección DUPLICADOS -->
+                    <div class="card" style="border-top:4px solid #f59e0b;">
+                        <h4 style="color:var(--azul-oscuro);margin-top:0;">🧬 Duplicados detectados</h4>
+                        <div id="dup-stats" style="display:flex;gap:18px;flex-wrap:wrap;margin-bottom:12px;color:var(--texto-suave);"></div>
+                        <div id="dup-resultados">
+                            <div class="empty-state"><span class="empty-state-icon">🔍</span><span class="empty-state-text">Tocá "Analizar base de datos" para empezar.</span></div>
+                        </div>
+                    </div>
+
+                    <div class="card" style="border-top:4px solid #6366f1;">
+                        <h4 style="color:#4338ca;margin-top:0;">🔗 Vinculación de docentes con aulas</h4>
+                        <p style="color:var(--texto-suave);font-size:.9em;">
+                            El sistema propone vincular automáticamente solo coincidencias ortográficas de alta confianza y las muestra para confirmar por lote.
+                            Los casos dudosos quedan en una cola de correcciones manuales. Verificá siempre DNI, correo, aula, día, materia y horario;
+                            si hay varios nombres pegados o el cronograma está mal, corregilo primero.
+                        </p>
+                        <div id="vinc-docentes-resultados">
+                            <div class="empty-state"><span class="empty-state-icon">🔗</span><span class="empty-state-text">Tocá "Analizar base de datos" para revisar nombres y aulas.</span></div>
+                        </div>
+                    </div>
+
+                    <!-- Sección HUÉRFANOS -->
+                    <div class="card" style="border-top:4px solid #dc2626;">
+                        <h4 style="color:var(--azul-oscuro);margin-top:0;">🦴 Datos huérfanos</h4>
+                        <div id="huer-resultados">
+                            <div class="empty-state"><span class="empty-state-icon">🦴</span><span class="empty-state-text">Tocá "Analizar base de datos" para ver los huérfanos.</span></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- SUB-TAB: SESIONES ACTIVAS (Bloque TIC 2) ─────────── -->
+                <div id="cfg-sesiones" class="admin-section">
+                    <div class="card" style="border-top:4px solid #10b981;">
+                        <h3 class="section-title" style="color:#059669;border-color:#a7f3d0;">
+                            👀 Sesiones Activas — Quién está online ahora
+                        </h3>
+                        <p style="color:var(--texto-suave);margin-bottom:14px;">
+                            Vista en vivo de los usuarios conectados al S.I.P.A. Auto-refresh cada 30s.
+                            Podés forzar el cierre de cualquier sesión de TIC o Plana Mayor.
+                        </p>
+                        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">
+                            <button class="btn btn-primary btn-small" onclick="cargarSesionesActivas()">🔄 Refrescar</button>
+                            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:.9em;color:var(--texto-suave);">
+                                <input type="checkbox" id="ses-auto" checked onchange="toggleSesionesAuto(this.checked)">
+                                Auto-refresh 30s
+                            </label>
+                        </div>
+                        <div id="ses-stats" style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px;"></div>
+                        <div id="ses-tabla"></div>
+                    </div>
+                </div>
+
+                <!-- SUB-TAB: SALUD DEL SISTEMA ─────────── -->
+                <div id="cfg-salud" class="admin-section">
+                    <div class="card" style="border-top:4px solid #14b8a6;">
+                        <h3 class="section-title" style="color:#0d9488;border-color:#99f6e4;">❤️ Salud del Sistema y Modo Mantenimiento</h3>
+                        <p style="color:var(--texto-suave);margin-bottom:14px;">Estado del motor Flask, conexión PostgreSQL y sesiones activas.</p>
+
+                        <div class="maint-card" id="maint-card">
+                            <div>
+                                <div class="maint-label">🛠️ Modo Mantenimiento</div>
+                                <div class="maint-desc">Cuando está activo, bloquea Plana Mayor, Bedeles y Docentes. Solo TIC opera.</div>
+                            </div>
+                            <label class="monitor-switch" style="margin-bottom:0;">
+                                <input type="checkbox" id="maint-toggle" onchange="toggleMantenimiento(this.checked)">
+                                <span class="monitor-switch-slider"></span>
+                                <span class="monitor-switch-label" id="maint-toggle-label">Activar</span>
+                            </label>
+                        </div>
+
+                        <button class="btn btn-primary btn-small" style="margin-top:14px;" onclick="cargarHealthCheck()">🔄 Verificar Estado</button>
+                        <div id="health-result" style="margin-top:12px;"></div>
+                    </div>
+                </div>
+
+                <!-- SUB-TAB: VERSIONES DE CRONOGRAMA ─────────── -->
+                <div id="cfg-versiones" class="admin-section">
+                    <div class="card" style="border-top:4px solid #14b8a6;">
+                        <h3 class="section-title" style="color:#0d9488;border-color:#99f6e4;">⏪ Versiones Históricas de Cronograma</h3>
+                        <p style="color:var(--texto-suave);margin-bottom:14px;">Cada vez que se sube un Word o se edita manualmente, se guarda una snapshot anterior. Permite restaurar si vino un horario mal.</p>
+
+                        <div class="grid" style="align-items:end;background:#f8fafc;padding:12px;border-radius:8px;">
+                            <div><label>Aula (opcional)</label><input type="text" id="ver-aula" placeholder="Ej: 17"></div>
+                            <div><label>Turno (opcional)</label><select id="ver-turno"><option value="">Todos</option><option>TM</option><option>TT</option></select></div>
+                            <button class="btn btn-primary btn-small" style="margin-top:0;" onclick="cargarVersionesCronograma()">🔍 Buscar Versiones</button>
+                        </div>
+                        <div id="versiones-resultado" style="margin-top:16px;"></div>
+                    </div>
+                </div>
+
+                <!-- SUB-TAB: CONSOLA SQL READ-ONLY ─────────── -->
+                <div id="cfg-sql" class="admin-section">
+                    <div class="card" style="border-top:4px solid #1f2937;">
+                        <h3 class="section-title" style="color:#111827;border-color:#d1d5db;">💻 Consola SQL Read-Only</h3>
+                        <p style="color:var(--texto-suave);margin-bottom:14px;">Ejecutá <strong>SELECT</strong>s arbitrarios para debugging. Las queries siempre corren en transacción <code>READ ONLY</code> con <code>ROLLBACK</code> implícito. Comandos de modificación (<code>INSERT/UPDATE/DELETE/DROP/...</code>) están bloqueados.</p>
+
+                        <div style="margin-bottom:10px;">
+                            <label>Query SQL</label>
+                            <textarea id="sql-query" rows="6" style="font-family:'DM Mono',monospace;font-size:.9em;"
+                                placeholder="SELECT docente, COUNT(*) FROM firmas_docentes WHERE fecha &gt;= CURRENT_DATE - 7 GROUP BY docente ORDER BY 2 DESC LIMIT 20;"></textarea>
+                        </div>
+                        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;align-items:center;">
+                            <button class="btn btn-primary btn-small" onclick="ejecutarSQLConsole()">▶️ Ejecutar (Ctrl+Enter)</button>
+                            <button class="btn btn-secondary btn-small" onclick="document.getElementById('sql-query').value='';document.getElementById('sql-result').innerHTML='';">🗑 Limpiar</button>
+                            <button class="btn btn-info btn-small" style="margin-left:auto;" onclick="document.getElementById('sql-catalogo').open = !document.getElementById('sql-catalogo').open;">📝 Catálogo de consultas</button>
+                        </div>
+                        <details id="sql-catalogo" class="sql-catalogo-wrap" open>
+                            <summary>📝 Catálogo de consultas (clic para colapsar)</summary>
+                            <div class="sql-ejemplos-cat">
+
+                                    <div class="sql-ej-grupo" id="sql-tablas-dinamicas">
+                                        <div class="sql-ej-grupo-titulo">📂 Ver contenido de tablas (SELECT *)</div>
+                                        <button class="sql-ej-btn" onclick="_sqlCargarTablasDinamicas(true)">🔄 Cargar lista de tablas</button>
+                                    </div>
+
+                                    <div class="sql-ej-grupo">
+                                        <div class="sql-ej-grupo-titulo">🗂️ Estructura de la Base de Datos</div>
+                                        <button class="sql-ej-btn" onclick="_setSql(this)" data-sql="SELECT table_name, table_type FROM information_schema.tables WHERE table_schema='public' ORDER BY table_name">📋 Listar todas las tablas</button>
+                                        <button class="sql-ej-btn" onclick="_setSql(this)" data-sql="SELECT column_name, data_type, is_nullable, column_default FROM information_schema.columns WHERE table_name='firmas_docentes' AND table_schema='public' ORDER BY ordinal_position">🔍 Columnas de firmas_docentes</button>
+                                        <button class="sql-ej-btn" onclick="_setSql(this)" data-sql="SELECT column_name, data_type FROM information_schema.columns WHERE table_name='cronograma_maestro' AND table_schema='public' ORDER BY ordinal_position">🔍 Columnas de cronograma_maestro</button>
+                                        <button class="sql-ej-btn" onclick="_setSql(this)" data-sql="SELECT table_name, COUNT(*) AS columnas FROM information_schema.columns WHERE table_schema='public' GROUP BY table_name ORDER BY 2 DESC">📊 Columnas por tabla</button>
+                                        <button class="sql-ej-btn" onclick="_setSql(this)" data-sql="SELECT indexname, tablename, indexdef FROM pg_indexes WHERE schemaname='public' ORDER BY tablename, indexname">🗝️ Índices definidos</button>
+                                        <button class="sql-ej-btn" onclick="_setSql(this)" data-sql="SELECT conname AS constraint_name, conrelid::regclass AS tabla, pg_get_constraintdef(oid) AS definicion FROM pg_constraint WHERE conrelid::regclass::text NOT LIKE 'pg_%' ORDER BY 2">🔗 Constraints (FK / UNIQUE / CHECK)</button>
+                                    </div>
+
+                                    <div class="sql-ej-grupo">
+                                        <div class="sql-ej-grupo-titulo">📊 Estadísticas Operativas</div>
+                                        <button class="sql-ej-btn" onclick="_setSql(this)" data-sql="SELECT relname AS tabla, n_live_tup AS filas, n_dead_tup AS borradas, pg_size_pretty(pg_total_relation_size(relid)) AS tamano FROM pg_stat_user_tables ORDER BY n_live_tup DESC">📦 Tamaño y conteo por tabla</button>
+                                        <button class="sql-ej-btn" onclick="_setSql(this)" data-sql="SELECT docente, COUNT(*) AS firmas FROM firmas_docentes WHERE fecha &gt;= CURRENT_DATE - 7 GROUP BY docente ORDER BY 2 DESC LIMIT 20">✍️ Top firmas (7 días)</button>
+                                        <button class="sql-ej-btn" onclick="_setSql(this)" data-sql="SELECT fecha, COUNT(*) AS total FROM firmas_docentes WHERE fecha &gt;= CURRENT_DATE - 30 GROUP BY fecha ORDER BY fecha DESC">📈 Firmas por día (30 días)</button>
+                                        <button class="sql-ej-btn" onclick="_setSql(this)" data-sql="SELECT aula, turno, COUNT(*) AS bloques FROM (SELECT aula, turno, jsonb_array_elements(config_json) FROM cronograma_maestro) t GROUP BY aula, turno ORDER BY 1, 2">📅 Bloques por aula</button>
+                                        <button class="sql-ej-btn" onclick="_setSql(this)" data-sql="SELECT aula, turno, COUNT(*) AS aspirantes FROM aspirantes GROUP BY aula, turno ORDER BY 3 DESC">👥 Aspirantes por aula</button>
+                                        <button class="sql-ej-btn" onclick="_setSql(this)" data-sql="SELECT fecha, COUNT(*) AS justifs FROM justificaciones_ausencia GROUP BY fecha ORDER BY fecha DESC LIMIT 30">📋 Justificaciones por día</button>
+                                        <button class="sql-ej-btn" onclick="_setSql(this)" data-sql="SELECT motivo, COUNT(*) AS cantidad FROM justificaciones_ausencia GROUP BY motivo ORDER BY 2 DESC">🏷️ Motivos de justificación más usados</button>
+                                    </div>
+
+                                    <div class="sql-ej-grupo">
+                                        <div class="sql-ej-grupo-titulo">👨‍🏫 Docentes</div>
+                                        <button class="sql-ej-btn" onclick="_setSql(this)" data-sql="SELECT id, nombre, email, dni, creado_en::date AS desde FROM docentes ORDER BY nombre">📋 Todos los docentes registrados</button>
+                                        <button class="sql-ej-btn" onclick="_setSql(this)" data-sql="SELECT DISTINCT b-&gt;&gt;'doc' AS docente FROM cronograma_maestro c, jsonb_array_elements(c.config_json::jsonb) b WHERE b-&gt;&gt;'doc' IS NOT NULL AND b-&gt;&gt;'doc' != '' ORDER BY docente">🎓 Docentes en el cronograma (todos)</button>
+                                        <button class="sql-ej-btn" onclick="_setSql(this)" data-sql="SELECT DISTINCT crono.docente FROM (SELECT b-&gt;&gt;'doc' AS docente FROM cronograma_maestro c, jsonb_array_elements(c.config_json::jsonb) b WHERE b-&gt;&gt;'doc' != '') crono LEFT JOIN docentes d ON LOWER(d.nombre) = LOWER(crono.docente) WHERE d.id IS NULL ORDER BY crono.docente">⚠️ Docentes en cronograma SIN cuenta</button>
+                                        <button class="sql-ej-btn" onclick="_setSql(this)" data-sql="SELECT docente, COUNT(*) AS horas_semanales FROM (SELECT b-&gt;&gt;'doc' AS docente FROM cronograma_maestro c, jsonb_array_elements(c.config_json::jsonb) b WHERE b-&gt;&gt;'doc' != '') t GROUP BY docente ORDER BY 2 DESC">⏱️ Carga horaria por docente</button>
+                                        <button class="sql-ej-btn" onclick="_setSql(this)" data-sql="SELECT d.nombre, d.email, MAX(f.fecha) AS ultima_firma, COUNT(f.id) AS total_firmas FROM docentes d LEFT JOIN firmas_docentes f ON LOWER(f.docente) = LOWER(d.nombre) GROUP BY d.id, d.nombre, d.email ORDER BY ultima_firma DESC NULLS LAST">🕐 Última firma por docente</button>
+                                        <button class="sql-ej-btn" onclick="_setSql(this)" data-sql="SELECT d.nombre, d.email, d.dni FROM docentes d LEFT JOIN firmas_docentes f ON LOWER(f.docente) = LOWER(d.nombre) WHERE f.id IS NULL ORDER BY d.nombre">💤 Docentes que nunca firmaron</button>
+                                    </div>
+
+                                    <div class="sql-ej-grupo">
+                                        <div class="sql-ej-grupo-titulo">🔍 Datos Operativos</div>
+                                        <button class="sql-ej-btn" onclick="_setSql(this)" data-sql="SELECT * FROM firmas_docentes WHERE fecha = CURRENT_DATE ORDER BY hora_firma">📋 Firmas de HOY</button>
+                                        <button class="sql-ej-btn" onclick="_setSql(this)" data-sql="SELECT aula, turno FROM cronograma_maestro ORDER BY aula, turno">📅 Aulas con cronograma</button>
+                                        <button class="sql-ej-btn" onclick="_setSql(this)" data-sql="SELECT grado, nombre, aula, turno FROM aspirantes ORDER BY aula, turno, nombre LIMIT 100">🎓 Padrón completo (primeros 100)</button>
+                                        <button class="sql-ej-btn" onclick="_setSql(this)" data-sql="SELECT docente, aula, turno, fecha, motivo, estado FROM justificaciones_ausencia WHERE estado='pendiente' ORDER BY fecha DESC">⏳ Justificaciones pendientes de revisión</button>
+                                        <button class="sql-ej-btn" onclick="_setSql(this)" data-sql="SELECT docente, aula, turno, fecha, hora_firma, lat, lng FROM firmas_docentes WHERE lat IS NOT NULL ORDER BY fecha DESC LIMIT 50">📍 Firmas con geolocalización</button>
+                                    </div>
+
+                                    <div class="sql-ej-grupo">
+                                        <div class="sql-ej-grupo-titulo">🛡️ Seguridad y Auditoría</div>
+                                        <button class="sql-ej-btn" onclick="_setSql(this)" data-sql="SELECT * FROM audit_log ORDER BY fecha DESC LIMIT 50">📜 Últimas 50 acciones auditadas</button>
+                                        <button class="sql-ej-btn" onclick="_setSql(this)" data-sql="SELECT usuario, accion, COUNT(*) FROM audit_log WHERE fecha &gt;= NOW() - INTERVAL '24 hours' GROUP BY usuario, accion ORDER BY 3 DESC">👤 Acciones por usuario (24h)</button>
+                                        <button class="sql-ej-btn" onclick="_setSql(this)" data-sql="SELECT ip, COUNT(*) AS intentos FROM failed_logins WHERE fecha &gt;= NOW() - INTERVAL '24 hours' GROUP BY ip ORDER BY 2 DESC">🚫 IPs con intentos fallidos (24h)</button>
+                                        <button class="sql-ej-btn" onclick="_setSql(this)" data-sql="SELECT tipo, detalle, ip, fecha FROM failed_logins ORDER BY fecha DESC LIMIT 50">❌ Últimos intentos fallidos</button>
+                                        <button class="sql-ej-btn" onclick="_setSql(this)" data-sql="SELECT usuario, nombre, rol, activo, ultimo_login, totp_activado FROM usuarios_admin ORDER BY ultimo_login DESC NULLS LAST">👥 Cuentas Plana Mayor</button>
+                                        <button class="sql-ej-btn" onclick="_setSql(this)" data-sql="SELECT nivel, endpoint, mensaje, fecha FROM system_log ORDER BY fecha DESC LIMIT 50">⚠️ Últimos errores del sistema</button>
+                                        <button class="sql-ej-btn" onclick="_setSql(this)" data-sql="SELECT clave, valor, descripcion, actualizado FROM config_sistema ORDER BY clave">⚙️ Configuración del sistema</button>
+                                    </div>
+
+                                    <div class="sql-ej-grupo">
+                                        <div class="sql-ej-grupo-titulo">📦 Histórico y Versiones</div>
+                                        <button class="sql-ej-btn" onclick="_setSql(this)" data-sql="SELECT aula, turno, COUNT(*) AS versiones, MAX(creado_en) AS ultima FROM cronograma_versiones GROUP BY aula, turno ORDER BY 4 DESC">⏪ Versiones de cronograma por aula</button>
+                                        <button class="sql-ej-btn" onclick="_setSql(this)" data-sql="SELECT fecha, aula, turno, fe, presentes, cant_ausentes FROM minutas ORDER BY fecha DESC, aula LIMIT 50">📝 Últimas minutas</button>
+                                        <button class="sql-ej-btn" onclick="_setSql(this)" data-sql="SELECT DATE_TRUNC('month', fecha) AS mes, COUNT(*) AS minutas FROM minutas GROUP BY 1 ORDER BY 1 DESC">📆 Minutas por mes</button>
+                                    </div>
+
+                                    <div class="sql-ej-grupo">
+                                        <div class="sql-ej-grupo-titulo">🔧 PostgreSQL — Diagnóstico</div>
+                                        <button class="sql-ej-btn" onclick="_setSql(this)" data-sql="SELECT version()">ℹ️ Versión de PostgreSQL</button>
+                                        <button class="sql-ej-btn" onclick="_setSql(this)" data-sql="SELECT current_database(), current_user, inet_server_addr(), inet_server_port()">🌐 Info de conexión actual</button>
+                                        <button class="sql-ej-btn" onclick="_setSql(this)" data-sql="SELECT pid, usename, application_name, client_addr, state, query_start, NOW() - query_start AS duracion FROM pg_stat_activity WHERE state &lt;&gt; 'idle' AND pid &lt;&gt; pg_backend_pid() ORDER BY query_start">⚡ Conexiones activas</button>
+                                        <button class="sql-ej-btn" onclick="_setSql(this)" data-sql="SELECT pg_size_pretty(pg_database_size(current_database())) AS tamano_total_bd">💾 Tamaño total de la BD</button>
+                                        <button class="sql-ej-btn" onclick="_setSql(this)" data-sql="SELECT relname AS tabla, pg_size_pretty(pg_relation_size(relid)) AS tamano FROM pg_stat_user_tables ORDER BY pg_relation_size(relid) DESC">📊 Top tablas por peso en disco</button>
+                                    </div>
+
+                            </div>
+                        </details>
+                        <div id="sql-result"></div>
+                    </div>
+                </div>
+
+                <!-- SUB-TAB: TELEGRAM ─────────────────── -->
+                <div id="cfg-telegram" class="admin-section">
+                    <div class="card" style="border-top:4px solid #0088cc;">
+                        <h3 class="section-title" style="color:#0088cc;border-color:#9bd2f0;">📱 Integración con Telegram</h3>
+                        <p style="color:var(--texto-suave);margin-bottom:14px;">
+                            Cada vez que un Bedel guarde una nueva minuta, el sistema envía automáticamente un resumen al grupo de Telegram de Plana Mayor.
+                            La configuración se guarda en la base de datos (no se expone en .env).
+                        </p>
+
+                        <div class="card" style="border-left:4px solid #6366f1;background:#f8faff;margin:14px 0;">
+                            <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+                                <div>
+                                    <h4 style="margin:0 0 6px;color:#4338ca;">🔐 Integración completa de Telegram para Bedelía</h4>
+                                    <div id="tg-bedel-acceso-estado" style="color:var(--texto-suave);">Consultando estado…</div>
+                                </div>
+                                <button id="btn-tg-bedel-acceso" class="btn btn-secondary" onclick="toggleAccesoTelegramBedelia()" disabled>⏳ Cargando…</button>
+                            </div>
+                            <p style="font-size:.88em;color:var(--texto-suave);margin:10px 0 0;">
+                                Activado: aparece la opción para vincular y se habilitan los comandos del bot y el acceso con <code>/link_pc</code>.
+                                Desactivado: se oculta la opción de vinculación y se bloquean las funciones de Telegram para Bedelía.
+                                <strong>El PIN diario permanece habilitado</strong> y no depende de este interruptor.
+                            </p>
+                        </div>
+
+                        <details class="nota-info" style="background:#f0f9ff;border-left:3px solid #0088cc;padding:12px 14px;margin-bottom:18px;">
+                            <summary style="cursor:pointer;font-weight:600;color:#0369a1;">ℹ️ ¿Cómo obtengo el token y el chat_id? (clic para ver pasos)</summary>
+                            <div style="margin-top:10px;font-size:.88em;color:var(--texto);line-height:1.6;">
+                                <button class="btn btn-info btn-small" type="button" onclick="copiarInstruccionesTelegram()">📋 Copiar guía + comandos para BotFather</button>
+                                <p style="margin:8px 0;color:var(--texto-suave);">La copia incluye los pasos de creación y el bloque listo para pegar en <code>@BotFather</code> después de enviar <code>/setcommands</code>.</p>
+                                <strong>1) Crear el bot:</strong><br>
+                                • Abrí Telegram → buscá <b>@BotFather</b><br>
+                                • Mandale <code>/newbot</code>, elegí nombre y username (ej: <code>sipa_cuello_bot</code>)<br>
+                                • Te devuelve un token tipo <code>123456:ABCdefGHI-...</code> → ese va en el campo "Token".<br><br>
+                                <strong>2) Comandos para pegar en @BotFather:</strong><br>
+                                • Enviá <code>/setcommands</code>, seleccioná tu bot y pegá este bloque completo:<br>
+                                <pre id="tg-botfather-commands" style="white-space:pre-wrap;overflow-wrap:anywhere;background:#fff;border:1px solid #cbd5e1;border-radius:8px;padding:12px;margin:8px 0 14px;font-family:'DM Mono',monospace;font-size:.84em;line-height:1.5;">menu - 📋 Menú principal
+hoy - 📊 Resumen de hoy
+ausentes - ❌ Ausentes hoy
+pins - 🔑 PINs del día
+justif - 📋 Justificaciones pendientes
+aula - 🏫 Info aula (/aula 25)
+historial - 📚 Últimas 10 minutas
+cronograma - 📅 Cronograma (/cronograma 25 TM)
+foja - ✍️ Foja docente
+docente - 👤 Perfil docente
+buscar - 🔎 Búsqueda fuzzy
+bedeles - 👥 Bedeles hoy
+semana - 📅 Reporte semanal
+mes - 📈 Reporte mensual
+ranking - 🏆 Top docentes/aulas
+cobertura - 📊 Cobertura por aula
+heatmap - 🔥 Mapa de problemas
+faltas_top - 📉 Top ausentismos
+comparar - ⚖️ Comparar 2 aulas
+vs_mes - 📊 Mes vs anterior
+grafico - 📈 Gráfico PNG
+dia - 📅 Resumen de un día
+dni - 🆔 Buscar por DNI
+buscar_novedad - 🔎 Buscar en novedades
+auditoria - 📜 Últimas acciones
+estado - 📡 Estado del sistema
+ping - 🏓 Test rápido
+logs - 📜 Logs recientes
+stats_bot - 🤖 Stats del bot
+pin_temp - 🔐 PIN temporal
+mantenimiento - 🛠 Modo mantto
+backup - 💾 Backup ahora
+reset_doc - 🔓 Reset password
+recordar - ⏰ Recordatorio
+recordatorios - ⏰ Lista pendientes
+plantillas - 📋 Plantillas mensajes
+notif - 📢 Aviso al grupo
+silenciar - 🔕 Pausar alertas
+activar - 🔔 Reactivar alertas
+perfil - 👤 Tu perfil
+ayuda - ❔ Manual completo</pre>
+                                <strong>3) Obtener el chat_id del grupo:</strong><br>
+                                • Creá un grupo privado en Telegram con la gente de Plana Mayor.<br>
+                                • Agregá el bot al grupo (Add member → <code>@sipa_cuello_bot</code>).<br>
+                                • Importante: en BotFather, mandá <code>/setprivacy</code> → DISABLE → para que el bot pueda leer del grupo.<br>
+                                • Mandá cualquier mensaje al grupo (ej: <code>/start</code>).<br>
+                                • Abrí en el navegador:
+                                <code>https://api.telegram.org/bot&lt;TU_TOKEN&gt;/getUpdates</code><br>
+                                • Buscá <code>"chat":{"id": -100xxxxxxxxxx,...</code> → ese número (incluido el signo negativo) va en "Chat ID".
+                            </div>
+                        </details>
+
+                        <div class="grid">
+                            <div>
+                                <label>Token del bot</label>
+                                <input type="password" id="tg-token" placeholder="123456:ABCdefGHIjklMNOpqrSTU-vwxYZ" autocomplete="off">
+                                <small style="color:var(--texto-tenue);">Se almacena cifrado en config_sistema. Dejá vacío para conservar el actual.</small>
+                            </div>
+                            <div>
+                                <label>Chat ID del grupo</label>
+                                <input type="text" id="tg-chat-id" placeholder="-1001234567890">
+                                <small style="color:var(--texto-tenue);">Para grupos arranca con <code>-100</code>. Para chat directo, número positivo.</small>
+                            </div>
+                        </div>
+
+                        <div class="toggle-container" style="margin-top:16px;">
+                            <label style="display:flex;align-items:center;gap:10px;cursor:pointer;">
+                                <input type="checkbox" id="tg-activo" style="width:18px;height:18px;cursor:pointer;">
+                                <span><strong>Envío automático de minutas</strong> — al guardar una minuta, se notifica al grupo.</span>
+                            </label>
+                        </div>
+                        <div class="toggle-container" style="margin-top:10px;">
+                            <label style="display:flex;align-items:center;gap:10px;cursor:pointer;">
+                                <input type="checkbox" id="tg-bot-interactivo" style="width:18px;height:18px;cursor:pointer;">
+                                <span><strong>🤖 Bot interactivo</strong> — responde comandos <code>/aula</code>, <code>/hoy</code>, <code>/ausentes</code>, <code>/foja</code>, <code>/pins</code>, <code>/justif</code>, <code>/estado</code>, <code>/ayuda</code> en el grupo.</span>
+                            </label>
+                        </div>
+
+                        <details style="margin-top:18px;background:#f0f9ff;border-radius:8px;padding:14px;border-left:3px solid #0088cc;">
+                            <summary style="cursor:pointer;font-weight:700;color:#0369a1;">🔔 Alertas y reportes automáticos (clic para configurar)</summary>
+                            <div style="margin-top:12px;font-size:.9em;color:var(--texto-suave);margin-bottom:14px;">
+                                Activá las que necesites. Todas funcionan sin intervención manual.
+                            </div>
+
+                            <h4 style="margin:14px 0 6px;color:var(--azul-oscuro);font-size:1em;">📊 Reportes periódicos</h4>
+                            <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;padding:6px 0;">
+                                <input type="checkbox" id="tg-al-resumen-diario" style="width:18px;height:18px;margin-top:2px;cursor:pointer;">
+                                <span><strong>Resumen diario + semanal + mensual</strong><br>
+                                <small style="color:var(--texto-tenue);">Diario a las 18:00 con todas las minutas. Semanal viernes 18:05. Mensual último día 23:30.</small></span>
+                            </label>
+
+                            <h4 style="margin:14px 0 6px;color:var(--azul-oscuro);font-size:1em;">🚨 Alertas operativas</h4>
+                            <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;padding:6px 0;">
+                                <input type="checkbox" id="tg-al-minutas-tardias" style="width:18px;height:18px;margin-top:2px;cursor:pointer;">
+                                <span><strong>Minutas tardías</strong><br>
+                                <small style="color:var(--texto-tenue);">Si pasada las 13:30 (TM) o 19:30 (TT) un Bedel no cargó la minuta, avisa al grupo.</small></span>
+                            </label>
+                            <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;padding:6px 0;">
+                                <input type="checkbox" id="tg-al-docentes-no-firman" style="width:18px;height:18px;margin-top:2px;cursor:pointer;">
+                                <span><strong>Docente no firmó su clase</strong><br>
+                                <small style="color:var(--texto-tenue);">Apenas se cierra la ventana de firma, notifica al grupo (chequeo cada 10 min entre 08-22hs).</small></span>
+                            </label>
+                            <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;padding:6px 0;">
+                                <input type="checkbox" id="tg-al-ausentismo" style="width:18px;height:18px;margin-top:2px;cursor:pointer;">
+                                <span><strong>Ausentismo recurrente</strong><br>
+                                <small style="color:var(--texto-tenue);">Lunes 08:00 lista docentes con 3+ clases sin firmar en últimos 7 días.</small></span>
+                            </label>
+                            <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;padding:6px 0;">
+                                <input type="checkbox" id="tg-al-baja-asistencia" style="width:18px;height:18px;margin-top:2px;cursor:pointer;">
+                                <span><strong>Baja asistencia crítica</strong><br>
+                                <small style="color:var(--texto-tenue);">Si una minuta se guarda con menos del 70% de presentes, alerta inmediata.</small></span>
+                            </label>
+                            <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;padding:6px 0;">
+                                <input type="checkbox" id="tg-al-login-sospechoso" style="width:18px;height:18px;margin-top:2px;cursor:pointer;">
+                                <span><strong>Intentos de acceso sospechosos</strong><br>
+                                <small style="color:var(--texto-tenue);">5+ logins fallidos en 10 minutos disparan alerta de seguridad. Anti-flood 30 min.</small></span>
+                            </label>
+
+                            <h4 style="margin:14px 0 6px;color:var(--azul-oscuro);font-size:1em;">📅 Operativa diaria</h4>
+                            <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;padding:6px 0;">
+                                <input type="checkbox" id="tg-al-pins-dia" style="width:18px;height:18px;margin-top:2px;cursor:pointer;">
+                                <span><strong>PINs del día (06:00)</strong><br>
+                                <small style="color:var(--texto-tenue);">Cada mañana envía los PINs operativos del día por aula.</small></span>
+                            </label>
+                            <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;padding:6px 0;">
+                                <input type="checkbox" id="tg-al-justif-pend" style="width:18px;height:18px;margin-top:2px;cursor:pointer;">
+                                <span><strong>Justificaciones pendientes (09:00)</strong><br>
+                                <small style="color:var(--texto-tenue);">Resumen matinal de cuántas justificaciones esperan revisión.</small></span>
+                            </label>
+
+                            <h4 style="margin:14px 0 6px;color:var(--azul-oscuro);font-size:1em;">⚙️ Sistema</h4>
+                            <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;padding:6px 0;">
+                                <input type="checkbox" id="tg-al-cronograma" style="width:18px;height:18px;margin-top:2px;cursor:pointer;">
+                                <span><strong>Cronograma actualizado</strong><br>
+                                <small style="color:var(--texto-tenue);">Cuando TIC sube un nuevo cronograma, avisa al grupo (con aulas afectadas).</small></span>
+                            </label>
+                            <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;padding:6px 0;">
+                                <input type="checkbox" id="tg-al-backup" style="width:18px;height:18px;margin-top:2px;cursor:pointer;">
+                                <span><strong>Backup automático completado</strong><br>
+                                <small style="color:var(--texto-tenue);">Notifica al grupo cuando termina el backup nocturno (éxito o falla).</small></span>
+                            </label>
+                            <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;padding:6px 0;">
+                                <input type="checkbox" id="tg-al-status-diario" style="width:18px;height:18px;margin-top:2px;cursor:pointer;">
+                                <span><strong>Status diario del sistema (07:30)</strong><br>
+                                <small style="color:var(--texto-tenue);">Cada mañana: estado de PostgreSQL, Flask, SSE, totales, disco libre.</small></span>
+                            </label>
+                        </details>
+
+                        <div style="display:flex;gap:9px;flex-wrap:wrap;margin-top:18px;padding-top:14px;border-top:1px solid var(--borde-suave);">
+                            <button class="btn btn-primary"   onclick="guardarTelegramConfig()">💾 Guardar configuración</button>
+                            <button class="btn btn-info"      onclick="probarTelegram()">🧪 Probar envío</button>
+                            <button class="btn btn-secondary" onclick="cargarTelegramConfig()">🔄 Recargar</button>
+                        </div>
+
+                        <div id="tg-resultado" style="margin-top:16px;"></div>
+
+                        <hr class="divider" style="margin:24px 0;">
+                        <h4 style="color:var(--azul-oscuro);margin-top:0;">🚀 Disparos manuales — envío inmediato al grupo</h4>
+                        <p style="color:var(--texto-suave);font-size:.88em;margin-bottom:12px;">
+                            Dispará cualquiera de los reportes/alertas en el momento, sin esperar al horario programado.
+                        </p>
+                        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:8px;">
+                            <button class="btn btn-info"      onclick="enviarManualTG('resumen_diario')">📊 Resumen diario</button>
+                            <button class="btn btn-info"      onclick="enviarManualTG('resumen_semanal')">📅 Resumen semanal</button>
+                            <button class="btn btn-info"      onclick="enviarManualTG('resumen_mensual')">📈 Resumen mensual</button>
+                            <button class="btn btn-warning"   onclick="enviarManualTG('minutas_tardias_tm')">⏰ Minutas tardías TM</button>
+                            <button class="btn btn-warning"   onclick="enviarManualTG('minutas_tardias_tt')">⏰ Minutas tardías TT</button>
+                            <button class="btn btn-warning"   onclick="enviarManualTG('docentes_no_firman')">👨‍🏫 Docentes no firmaron</button>
+                            <button class="btn btn-warning"   onclick="enviarManualTG('ausentismo')">🔁 Ausentismo recurrente</button>
+                            <button class="btn btn-primary"   onclick="enviarManualTG('pins_dia')">🔑 PINs del día</button>
+                            <button class="btn btn-primary"   onclick="enviarManualTG('justif_pend')">📋 Justif. pendientes</button>
+                            <button class="btn btn-secondary" onclick="enviarManualTG('status_diario')">☀️ Status sistema</button>
+                        </div>
+                        <div id="tg-manual-resultado" style="margin-top:12px;"></div>
+
+                        <hr class="divider" style="margin:24px 0;">
+                        <h4 style="color:var(--azul-oscuro);margin-top:0;">📈 Estadísticas del bot (últimos 7 días)</h4>
+                        <div id="tg-stats-cards" style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:12px;">
+                            <div class="card" style="text-align:center;padding:14px;border-top:3px solid var(--exito);">
+                                <div style="font-size:.75em;color:var(--texto-suave);">ENVÍOS OK</div>
+                                <div style="font-size:1.9em;font-weight:800;color:var(--exito-cl);font-family:'Barlow Condensed';" id="tg-stat-ok">—</div>
+                            </div>
+                            <div class="card" style="text-align:center;padding:14px;border-top:3px solid var(--advertencia-cl);">
+                                <div style="font-size:.75em;color:var(--texto-suave);">WARNINGS</div>
+                                <div style="font-size:1.9em;font-weight:800;color:var(--advertencia);font-family:'Barlow Condensed';" id="tg-stat-warn">—</div>
+                            </div>
+                            <div class="card" style="text-align:center;padding:14px;border-top:3px solid var(--peligro-cl);">
+                                <div style="font-size:.75em;color:var(--texto-suave);">ERRORES</div>
+                                <div style="font-size:1.9em;font-weight:800;color:var(--peligro-cl);font-family:'Barlow Condensed';" id="tg-stat-err">—</div>
+                            </div>
+                        </div>
+                        <button class="btn btn-secondary btn-small" onclick="cargarTelegramStats()">🔄 Refrescar estadísticas</button>
+                        <details style="margin-top:10px;">
+                            <summary style="cursor:pointer;color:var(--texto-suave);">📜 Ver últimos 10 eventos (clic)</summary>
+                            <div id="tg-stats-recientes" style="margin-top:8px;font-size:.85em;font-family:'DM Mono',monospace;background:#f8fafc;padding:10px;border-radius:6px;max-height:300px;overflow-y:auto;"></div>
+                        </details>
+
+                        <hr class="divider" style="margin:24px 0;">
+                        <h4 style="color:var(--azul-oscuro);margin-top:0;">📤 Reenvío manual de una minuta</h4>
+                        <p style="color:var(--texto-suave);font-size:.88em;margin-bottom:12px;">
+                            Si por algún motivo una minuta no llegó al grupo, podés reenviarla manualmente acá.
+                        </p>
+                        <div class="grid">
+                            <div><label>Aula</label><input type="text" id="tg-re-aula" placeholder="25" style="text-transform:uppercase;"></div>
+                            <div><label>Turno</label><select id="tg-re-turno"><option value="TM">TM (Mañana)</option><option value="TT">TT (Tarde)</option></select></div>
+                            <div><label>Fecha</label><input type="date" id="tg-re-fecha"></div>
+                        </div>
+                        <button class="btn btn-warning" style="margin-top:12px;" onclick="reenviarMinutaTelegram()">📤 Reenviar al grupo</button>
+                        <div id="tg-reenvio-resultado" style="margin-top:12px;"></div>
+                    </div>
+                </div>
+
+                <!-- SUB-TAB: PELIGRO ─────────────────── -->
+                <div id="cfg-peligro" class="admin-section">
+                    <div class="card" style="border-top:4px solid var(--peligro-cl);background:#fef2f2;border:2px dashed var(--peligro-cl);">
+                        <h3 style="color:var(--peligro);margin-top:0;">🚨 ADVERTENCIA</h3>
+                        <p style="color:var(--texto);margin-bottom:18px;">Las siguientes acciones modifican la base de datos de forma <strong>irreversible</strong>. Antes de operar, descargue un respaldo.</p>
+
+                        <h4 style="color:var(--azul-oscuro);margin-top:14px;">💾 Respaldo (Backup) de la Base</h4>
+                        <p style="color:var(--texto-suave);font-size:.88em;margin-bottom:10px;">Descarga un JSON con el contenido completo de las 7 tablas (cronogramas, padrones, firmas, minutas, justificaciones, configuración).</p>
+                        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                            <button class="btn btn-primary" onclick="descargarBackup()">📥 Descargar Respaldo .json (manual)</button>
+                            <button class="btn btn-info" onclick="cargarBackupsAuto()">🗂️ Ver Backups Automáticos</button>
+                        </div>
+                        <div id="su-backups-auto-lista" style="margin-top:12px;"></div>
+
+                        <hr class="divider" style="margin:24px 0;border-color:var(--peligro-cl);">
+
+                        <h4 style="color:var(--exito);margin-top:14px;">♻️ Restaurar desde Backup</h4>
+                        <p style="color:var(--texto-suave);font-size:.88em;margin-bottom:10px;">Cargue un archivo <code>.json</code> de respaldo. <strong>⚠️ Esta operación BORRA las tablas actuales antes de restaurar.</strong></p>
+                        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                            <input type="file" id="restore-file" accept=".json" style="flex:1;min-width:240px;">
+                            <button class="btn btn-warning" onclick="restaurarBackup()">⚠️ Restaurar BD desde Archivo</button>
+                        </div>
+                        <div id="restore-result" style="margin-top:12px;"></div>
+
+                        <hr class="divider" style="margin:24px 0;border-color:var(--peligro-cl);">
+
+                        <h4 style="color:#7c3aed;margin-top:14px;">📦 Archivar Ciclo Lectivo Anterior</h4>
+                        <p style="color:var(--texto-suave);font-size:.88em;margin-bottom:10px;">Mueve minutas y firmas de un año cerrado a las tablas <code>minutas_archivo</code> y <code>firmas_archivo</code> (solo lectura), liberando la base operativa.</p>
+                        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                            <label style="margin:0;">Año:</label>
+                            <input type="number" id="archivar-anio" placeholder="2025" min="2020" max="2099" style="width:100px;">
+                            <button class="btn btn-warning" onclick="archivarCiclo()">📦 Archivar Año</button>
+                        </div>
+                        <div id="archivar-result" style="margin-top:12px;"></div>
+
+                        <hr class="divider" style="margin:24px 0;border-color:var(--peligro-cl);">
+
+                        <h4 style="color:var(--advertencia);margin-top:14px;">♻️ Purga del Cronograma Maestro</h4>
+                        <p style="color:var(--texto-suave);font-size:.88em;margin-bottom:10px;">Elimina solo la tabla <code>cronograma_maestro</code>. Útil cuando un Word vino mal y hay que recargar el horario sin tocar firmas, padrón ni minutas.</p>
+                        <div style="margin-bottom:12px;">
+                            <input type="text" id="confirmar-purga-cronograma"
+                                   placeholder="PURGAR CRONOGRAMA"
+                                   oninput="_chequearPurgaCronograma()"
+                                   style="font-family:'DM Mono',monospace;font-weight:700;">
+                        </div>
+                        <button id="btn-purgar-cronograma" class="btn btn-warning btn-full" disabled
+                                onclick="purgarCronograma()" style="font-size:1em;">
+                            ♻️ Purgar Cronograma (mantener padrones/firmas)
+                        </button>
+
+                        <hr class="divider" style="margin:24px 0;border-color:var(--peligro-cl);">
+
+                        <h4 style="color:var(--peligro);margin-top:14px;">🗑️ Vaciar y Resetear Tablas (Fin de Ciclo)</h4>
+                        <p style="color:var(--texto-suave);font-size:.88em;margin-bottom:14px;">Trunca todas las tablas operativas. Tipee la frase de confirmación exacta para liberar el botón.</p>
+                        <div style="margin-bottom:12px;">
+                            <label style="display:block;margin-bottom:6px;font-size:.78em;font-weight:700;color:var(--peligro);">Tipee para confirmar:</label>
+                            <input type="text" id="confirmar-formateo-input"
+                                   placeholder="CONFIRMAR FORMATEO INSTITUCIONAL"
+                                   oninput="_chequearConfirmacionFormateo()"
+                                   style="font-family:'DM Mono',monospace;font-weight:700;letter-spacing:.5px;">
+                        </div>
+                        <button id="btn-formatear-su" class="btn btn-danger btn-full" disabled
+                                onclick="restaurarSistema()" style="font-size:1em;">
+                            🗑️ Formatear Sistema (Borrar Todo)
+                        </button>
+                    </div>
+                </div>
+
+            </div>
+
+        </div><!-- /panel-admin -->
+    </div>
+
+</div><!-- /container -->
+
+<div id="toast-container"></div>
+
+<!-- ═══ BÚSQUEDA GLOBAL (Ctrl+K) — Bloque TIC 1 ═══ -->
+<div id="search-global-overlay" class="search-global-overlay" style="display:none;">
+    <div class="search-global-modal" onclick="event.stopPropagation();">
+        <div class="search-global-header">
+            <span class="search-global-icon">🔎</span>
+            <input type="text" id="search-global-input"
+                   placeholder="Buscar docentes, aulas, minutas, justificaciones..."
+                   autocomplete="off" spellcheck="false">
+            <kbd class="search-global-esc">Esc</kbd>
+        </div>
+        <div id="search-global-results" class="search-global-results">
+            <div class="search-global-hint">
+                <div style="font-size:1.4em;margin-bottom:8px;">⚡</div>
+                <div>Escribí al menos 2 caracteres para buscar.</div>
+                <div style="margin-top:18px;font-size:.85em;color:var(--texto-tenue);">
+                    <kbd>↑↓</kbd> navegar · <kbd>Enter</kbd> abrir · <kbd>Esc</kbd> cerrar
+                </div>
+            </div>
+        </div>
+        <div class="search-global-footer">
+            <span>👨‍🏫 Docentes</span>
+            <span>🏫 Aulas</span>
+            <span>📋 Justif.</span>
+            <span>📝 Minutas</span>
+            <span>📜 Auditoría</span>
+        </div>
+    </div>
+</div>
+
+<!-- Command Palette (Ctrl+K) -->
+<div id="cmd-palette-overlay" class="cmd-overlay" onclick="if(event.target===this)cerrarCmdPalette()">
+    <div class="cmd-modal" role="dialog">
+        <div class="cmd-search">
+            <span class="cmd-search-icon">🔍</span>
+            <input id="cmd-input" type="text"
+                   placeholder="Buscar acciones, aulas, docentes…"
+                   oninput="_filtrarCmd()"
+                   onkeydown="_navegarCmd(event)"
+                   autocomplete="off">
+            <kbd class="cmd-search-hint">ESC</kbd>
+        </div>
+        <div id="cmd-results" class="cmd-results"></div>
+        <div class="cmd-footer">
+            <span><kbd>↑↓</kbd> navegar</span>
+            <span><kbd>Enter</kbd> ejecutar</span>
+            <span><kbd>Esc</kbd> cerrar</span>
+        </div>
+    </div>
+</div>
+
+<!-- Botón flotante de Acceso Técnico (Super Usuario / TIC) -->
+<button id="btn-acceso-su" class="btn-acceso-su" onclick="abrirModalSU()"
+        title="Acceso Técnico · Personal de TIC">
+    <span class="btn-acceso-su-icon">⚙</span>
+    <span class="btn-acceso-su-label">Acceso Técnico</span>
+</button>
+
+<!-- Modal de login Super Usuario -->
+<div id="su-modal-overlay" class="su-modal-overlay" onclick="if(event.target===this)cerrarModalSU()">
+    <div class="su-modal-sheet">
+        <div class="su-modal-warning">
+            <span class="su-warning-icon">⚠️</span>
+            <strong>Área Restringida</strong>
+            <span>Las acciones en este módulo alteran la estructura de datos de la Escuela. Acceso exclusivo del personal de TIC autorizado.</span>
+        </div>
+        <div class="su-modal-titulo">🔧 Acceso Técnico — Super Usuario</div>
+        <div style="margin-bottom:14px;">
+            <label style="display:block;margin-bottom:6px;font-size:.78em;color:var(--azul-medio);letter-spacing:.5px;">Clave de Súper Usuario</label>
+            <input type="password" id="su-password" placeholder="••••••••••••••••"
+                   autocomplete="current-password"
+                   style="font-family:'DM Mono',monospace;letter-spacing:2px;">
+        </div>
+        <div id="su-error" class="su-error-box" style="display:none;"></div>
+        <div style="display:flex;gap:9px;flex-wrap:wrap;">
+            <button class="btn btn-dark" style="flex:1;" onclick="ingresarSU()">🔓 Ingresar como TIC</button>
+            <button class="btn btn-secondary" onclick="cerrarModalSU()">Cancelar</button>
+        </div>
+        <p class="su-modal-footnote">
+            🔒 La clave se valida en el servidor mediante <code>SHA-256 + salt institucional</code>.
+            Nunca se almacena ni transmite en texto plano.
+        </p>
+    </div>
+</div>
+
+<!-- Modal AUTO-JUSTIFICACIÓN DEL DOCENTE -->
+<div id="auto-justif-modal" class="justif-modal-overlay" onclick="if(event.target===this)cerrarAutoJustif()">
+    <div class="justif-modal-sheet">
+        <div class="justif-modal-titulo" style="color:var(--advertencia);border-color:#fed7aa;">
+            📋 Justificar / Firma Tardía
+        </div>
+        <div id="auto-justif-info" class="justif-info-box" style="background:#fff7ed;border-color:var(--advertencia-cl);"></div>
+        <p style="font-size:.86em;color:var(--texto-suave);margin:0 0 14px;">
+            La justificación quedará <strong>pendiente de aprobación</strong> por la Plana Mayor.
+        </p>
+        <div style="margin-bottom:12px;">
+            <label style="display:block;margin-bottom:6px;">Motivo</label>
+            <select id="auto-justif-motivo" style="width:100%;">
+                <option value="">— Seleccione un motivo —</option>
+                <option>Comisión de servicio</option>
+                <option>Razones médicas</option>
+                <option>Recargo de servicio</option>
+                <option>Problemas de conectividad / SIPA</option>
+                <option>Fuerza mayor</option>
+                <option>Otro</option>
+            </select>
+        </div>
+        <div style="margin-bottom:12px;">
+            <label style="display:block;margin-bottom:6px;">Comentario <span style="color:var(--peligro);">*</span></label>
+            <textarea id="auto-justif-comentario" rows="3" placeholder="Detalle brevemente la situación (obligatorio)"></textarea>
+        </div>
+        <div style="margin-bottom:16px;padding:11px 13px;background:#f0f9ff;border-left:3px solid var(--azul-primario);border-radius:6px;">
+            <label style="display:block;margin-bottom:6px;color:var(--azul-medio);">🔐 Confirme con su contraseña <span style="color:var(--peligro);">*</span></label>
+            <input type="password" id="auto-justif-pass" placeholder="Su contraseña de docente" autocomplete="current-password">
+            <p style="font-size:.76em;color:var(--texto-suave);margin:6px 0 0;line-height:1.5;">
+                Se solicita reingresar la contraseña como <strong>firma digital de conformidad</strong>, para evitar fraudes si la sesión queda abierta.
+            </p>
+        </div>
+        <div style="display:flex;gap:9px;flex-wrap:wrap;">
+            <button id="auto-justif-btn-enviar" class="btn btn-warning" style="flex:1;background:linear-gradient(135deg,var(--advertencia),var(--advertencia-cl));" onclick="enviarAutoJustif()">
+                📋 Enviar Justificación
+            </button>
+            <button class="btn btn-secondary" onclick="cerrarAutoJustif()">Cancelar</button>
+        </div>
+    </div>
+</div>
+
+<!-- Modal de justificación de ausencias (a nivel body para evitar conflictos de posicionamiento) -->
+<div id="justif-modal-overlay" class="justif-modal-overlay" onclick="if(event.target===this)cerrarModalJustif()">
+    <div class="justif-modal-sheet">
+        <div class="justif-modal-titulo">📋 Justificar Inasistencia</div>
+        <div id="justif-info" class="justif-info-box"></div>
+        <div style="margin-bottom:12px;">
+            <label style="display:block;margin-bottom:6px;">Motivo</label>
+            <select id="justif-motivo" style="width:100%;">
+                <option value="">— Seleccione un motivo —</option>
+                <option>Licencia Médica</option>
+                <option>Carpeta Médica</option>
+                <option>Comisión de Servicio</option>
+                <option>Cambio de Guardia</option>
+                <option>Permiso Especial</option>
+                <option>Aviso Tardío</option>
+                <option>Causa Fuerza Mayor</option>
+                <option>Otro</option>
+            </select>
+        </div>
+        <div style="margin-bottom:14px;">
+            <label style="display:block;margin-bottom:6px;">Comentario (opcional)</label>
+            <textarea id="justif-comentario" rows="3" placeholder="Detalle, número de expediente, etc."></textarea>
+        </div>
+        <div style="display:flex;gap:9px;flex-wrap:wrap;">
+            <button class="btn btn-success" style="flex:1;" onclick="confirmarJustificacion()">✅ Guardar Justificación</button>
+            <button class="btn btn-secondary" onclick="cerrarModalJustif()">Cancelar</button>
+        </div>
+    </div>
+</div>
+
+<footer class="developer-footer" aria-label="Créditos de desarrollo">
+    <div class="developer-footer-icons">
+        <a class="developer-footer-icon developer-footer-icon--linkedin"
+           href="https://www.linkedin.com/in/andrés-sebastian-maidana-10882b423"
+           target="_blank" rel="noopener noreferrer"
+           aria-label="Abrir perfil de LinkedIn de Andrés Sebastián Maidana"
+           title="LinkedIn">in</a>
+        <a class="developer-footer-icon developer-footer-icon--mail"
+           href="https://outlook.live.com/mail/0/deeplink/compose?to=aannddrreessmaidana%40outlook.es"
+           target="_blank" rel="noopener noreferrer"
+           aria-label="Enviar correo a aannddrreessmaidana@outlook.es"
+           title="Correo electrónico">
+            <svg viewBox="0 0 24 24" focusable="false"><path d="M3 5.5h18A1.5 1.5 0 0 1 22.5 7v10a1.5 1.5 0 0 1-1.5 1.5H3A1.5 1.5 0 0 1 1.5 17V7A1.5 1.5 0 0 1 3 5.5Zm9 7.1L3 7v10h18V7l-9 5.6ZM4.7 7 12 11.5 19.3 7H4.7Z"/></svg>
+        </a>
+    </div>
+    <div class="developer-footer-credit">
+        <p>Diseñado y desarrollado con pasión por <strong>Andrés Sebastián MAIDANA</strong></p>
+    </div>
+    <div class="developer-footer-location"><span aria-hidden="true">&lt;/&gt; with</span> <span class="developer-footer-heart" aria-label="amor">♥</span> <span>en Argentina</span></div>
+</footer>
+
+<script src="{{ url_for('static', filename='js/main.js') }}?v=5.14"></script>
+<script src="{{ url_for('static', filename='js/bedelia.js') }}?v=5.9"></script>
+<script src="{{ url_for('static', filename='js/docente.js') }}?v=5.7"></script>
+<script src="{{ url_for('static', filename='js/admin.js') }}?v=6.24"></script>
+
+<script>
+/* ── INICIALIZACIÓN EXTRA ── */
+document.addEventListener('DOMContentLoaded', function() {
+    // Fecha en registro admin
+    const regFecha = document.getElementById('reg-fecha');
+    if (regFecha) regFecha.value = obtenerFechaHoyLocal();
+
+    // Fecha en encabezado del docente
+    const docFecha = document.getElementById('docente-fecha-hoy');
+    if (docFecha) {
+        const hoy = new Date();
+        docFecha.textContent = hoy.toLocaleDateString('es-AR', {weekday:'long', day:'numeric', month:'long', year:'numeric'});
+    }
+});
+</script>
+
+</body>
+</html>

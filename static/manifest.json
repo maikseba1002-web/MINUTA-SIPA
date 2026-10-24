@@ -1,0 +1,44 @@
+{
+  "name": "S.I.P.A. — Sistema Integral de Partes de Aula",
+  "short_name": "SIPA",
+  "description": "Sistema oficial de gestión de partes de aula — Escuela de Suboficiales 'Cbo. Raúl R. Cuello' · Gendarmería Nacional",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0f2337",
+  "theme_color": "#0f2337",
+  "lang": "es-AR",
+  "dir": "ltr",
+  "categories": ["productivity", "education", "government"],
+  "icons": [
+    {
+      "src": "/static/img/logo-tic.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/static/img/logo-tic.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Portal Docente",
+      "short_name": "Docente",
+      "description": "Firmar presentismo",
+      "url": "/?modulo=docente",
+      "icons": [{ "src": "/static/img/logo-tic.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Bedelía",
+      "short_name": "Bedelía",
+      "description": "Cargar parte diario",
+      "url": "/?modulo=bedel",
+      "icons": [{ "src": "/static/img/logo-tic.png", "sizes": "192x192" }]
+    }
+  ]
+}

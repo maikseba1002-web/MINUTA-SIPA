@@ -1,0 +1,12 @@
+{
+  "include": ["main.py"],
+  "exclude": ["**/__pycache__", "**/node_modules", "backups", "static"],
+  "pythonVersion": "3.11",
+  "typeCheckingMode": "basic",
+  "_comment": "psycopg2 no tiene type stubs completos: sus cursores tipan fetchall/fetchone como Optional, lo que dispara falsos positivos en cada query. Los silenciamos a 'information' (no errors).",
+  "reportOptionalIterable":         "information",
+  "reportOptionalSubscript":        "information",
+  "reportOptionalMemberAccess":     "information",
+  "reportPossiblyUnboundVariable":  "warning",
+  "reportAttributeAccessIssue":     "warning"
+}
