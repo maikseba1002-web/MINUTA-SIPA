@@ -45,6 +45,47 @@ async function guardarFilaCatalogo(button) {
     }
 }
 
+async function eliminarFilaCatalogo(button) {
+    const row = button.closest('tr');
+    if (!row) return;
+    const aula = row.dataset.aulaOriginal;
+    const turno = row.dataset.turnoOriginal;
+    const nombre = row.querySelector('.cat-nombre')?.value.trim() || aula;
+    const advertencia = `¿Eliminar el aula ${aula} (${turno}) - ${nombre}?\n\n` +
+        'Esta acción eliminará el aula del catálogo y también su cronograma vigente. ' +
+        'Se conservarán el padrón de aspirantes, las minutas, las firmas docentes y las versiones históricas del cronograma.';
+    if (!confirm(advertencia)) return;
+
+    button.disabled = true;
+    try {
+        const r = await fetch(
+            `/api/aulas_catalogo/${encodeURIComponent(aula)}/${encodeURIComponent(turno)}`,
+            {
+                method: 'DELETE',
+                headers: {'X-SU-Token': window.SIPA.suToken || ''},
+            }
+        );
+        const texto = await r.text();
+        let d;
+        try {
+            d = JSON.parse(texto);
+        } catch {
+            const tipo = r.headers.get('content-type') || 'desconocido';
+            throw new Error(
+                `El servidor respondió con un formato inesperado (HTTP ${r.status}, ${tipo}). ` +
+                'Verifique que el backend esté actualizado.'
+            );
+        }
+        if (!r.ok) throw new Error(d.error || 'No se pudo eliminar el aula');
+        mostrarToast('Aula y cronograma vigente eliminados.', 'success');
+        cargarCatalogoAulas();
+    } catch (e) {
+        mostrarToast(e.message, 'error');
+    } finally {
+        button.disabled = false;
+    }
+}
+
 async function cargarCatalogoAulas() {
     const body = document.getElementById('body-catalogo-aulas');
     if (!body) return;
@@ -68,7 +109,10 @@ async function cargarCatalogoAulas() {
                     <td><input class="cat-anio" value="${escapeHTML(a.anio)}" maxlength="20"></td>
                     <td><input class="cat-especialidad" value="${escapeHTML(a.especialidad)}" maxlength="150"></td>
                     <td><input class="cat-curso" value="${escapeHTML(a.curso)}" maxlength="150"></td>
-                    <td><button class="btn btn-success btn-small" onclick="guardarFilaCatalogo(this)">💾 Guardar</button></td>
+                    <td><div style="display:flex;gap:6px;flex-wrap:wrap;">
+                        <button class="btn btn-success btn-small" onclick="guardarFilaCatalogo(this)">💾 Guardar</button>
+                        <button class="btn btn-danger btn-small" onclick="eliminarFilaCatalogo(this)">🗑️ Eliminar</button>
+                    </div></td>
                 </tr>`).join('') :
                 '<tr><td colspan="7">No hay aulas que coincidan.</td></tr>';
         } catch (e) {
@@ -1024,10 +1068,10 @@ async function verificarConexionBD() {
             const tablas = data.tablas || {};
             // Agrupar por categoría para que se lea bien con 12+ tablas
             const grupos = {
-                '📚 Datos académicos': ['cronograma_maestro','cronograma_versiones','aspirantes','docentes','aula_catalogo'],
-                '📋 Operatividad diaria': ['minutas','firmas_docentes','justificaciones_ausencia','pin_overrides'],
+                '📚 Datos académicos': ['cronograma_maestro','cronograma_versiones','aspirantes','docentes','aula_catalogo','aulas_catalogo_bajas','coberturas_docente'],
+                '📋 Operatividad diaria': ['minutas','firmas_docentes','justificaciones_ausencia','pin_overrides','adelantos_horario'],
                 '🔒 Seguridad y auditoría': ['usuarios_admin','audit_log','failed_logins','system_log'],
-                '⚙️ Configuración': ['config_sistema','tipos_novedad'],
+                '⚙️ Configuración': ['config_sistema','tipos_novedad','calendario_no_actividad'],
                 '🤖 Telegram / Bot': ['bedeles_telegram','bedel_link_tokens','recordatorios_telegram','bot_comando_log'],
                 '📦 Archivado': ['minutas_archivo','firmas_archivo'],
             };
@@ -1719,12 +1763,30 @@ async function refrescarMonitor(silencioso = false) {
         const [resConfig, resFirmas, resInasis] = await Promise.all([
             fetch('/api/config_aula'),
             fetch(`/api/firmas_docentes?fecha=${hoy}`, { headers: _headersCalendario() }),
-            fetch(`/api/inasistencias?desde=${hoy}&hasta=${hoy}&incluir_justificadas=1`),
+            fetch(`/api/inasistencias?desde=${hoy}&hasta=${hoy}&incluir_justificadas=1`, {
+                headers: _headersCalendario(),
+            }),
         ]);
 
-        const config = resConfig.ok ? await resConfig.json() : [];
-        const firmas = resFirmas.ok ? await resFirmas.json() : [];
-        const inasis = resInasis.ok ? await resInasis.json() : [];
+        for (const [label, response] of [
+            ['cronogramas', resConfig],
+            ['firmas', resFirmas],
+            ['inasistencias', resInasis],
+        ]) {
+            if (!response.ok) {
+                let detail = '';
+                try {
+                    detail = (await response.json()).error || '';
+                } catch {}
+                throw new Error(detail || `Error al cargar ${label} (HTTP ${response.status})`);
+            }
+        }
+
+        const [config, firmas, inasis] = await Promise.all([
+            resConfig.json(),
+            resFirmas.json(),
+            resInasis.json(),
+        ]);
 
         // Mapa firma: "docente|aula|turno" → firma
         const mapaFirmas = {};
@@ -1808,9 +1870,8 @@ async function refrescarMonitor(silencioso = false) {
         await _renderRegistroFirmas(firmas, hoy);
 
     } catch (e) {
-        if (!silencioso) {
-            monEl.innerHTML = `<div class="empty-state" style="padding:30px;color:var(--peligro);">Error: ${e.message}</div>`;
-        }
+        monEl.innerHTML = `<div class="empty-state" style="padding:30px;color:var(--peligro);">Error: ${_esc(e.message)}</div>`;
+        console.error('[refrescarMonitor]', e);
     } finally {
         if (btn) { btn.disabled = false; btn.innerHTML = orig; }
     }
@@ -2695,6 +2756,8 @@ async function cargarResumenArchivo() {
     const setAnios = new Set();
     (d.minutas_archivo.anios || []).forEach(x => setAnios.add(x.anio));
     (d.firmas_archivo.anios  || []).forEach(x => setAnios.add(x.anio));
+    (d.minutas_actual.anios  || []).forEach(x => setAnios.add(x.anio));
+    (d.firmas_actual.anios   || []).forEach(x => setAnios.add(x.anio));
     const aniosOrdenados = Array.from(setAnios).sort((a,b) => b - a);
     const sel = document.getElementById('arch-anio');
     if (sel) {
@@ -2709,7 +2772,8 @@ async function cargarResumenArchivo() {
     const docWrap = document.getElementById('arch-docente-wrap');
     if (docWrap) docWrap.style.display = (tipo === 'firmas') ? '' : 'none';
 
-    if (!d.minutas_archivo.existe && !d.firmas_archivo.existe) {
+    const hayActual = (d.minutas_actual.anios.length + d.firmas_actual.anios.length) > 0;
+    if (!d.minutas_archivo.existe && !d.firmas_archivo.existe && !hayActual) {
         cont.innerHTML = `<div class="empty-state" style="padding:24px;">
             <span class="empty-state-icon">📭</span>
             <span class="empty-state-text">
@@ -2724,6 +2788,8 @@ async function cargarResumenArchivo() {
     cont.innerHTML = `<div class="archivo-stats">
         ${_renderArchivoStat('📋 Minutas archivadas', d.minutas_archivo)}
         ${_renderArchivoStat('✍️ Firmas archivadas',  d.firmas_archivo)}
+        ${_renderArchivoStat('📋 Minutas del ciclo en curso', d.minutas_actual)}
+        ${_renderArchivoStat('✍️ Firmas del ciclo en curso',  d.firmas_actual)}
     </div>`;
 }
 
@@ -2758,7 +2824,7 @@ async function consultarArchivo() {
     // Mostrar/ocultar campo docente según tipo
     document.getElementById('arch-docente-wrap').style.display = (tipo === 'firmas') ? '' : 'none';
 
-    const qs = new URLSearchParams({tipo, limit: '200'});
+    const qs = new URLSearchParams({tipo, limit: '200', origen: document.getElementById('arch-origen')?.value || 'todo'});
     if (anio)  qs.set('anio', anio);
     if (aula)  qs.set('aula', aula);
     if (turno) qs.set('turno', turno);
@@ -2776,12 +2842,14 @@ async function consultarArchivo() {
     }
 
     const cabeceras = tipo === 'minutas'
-        ? ['Fecha','Aula','Turno','Bedel','Sub-Bedel','F.E.','Presentes','Ausentes','Novedades']
-        : ['Fecha','Docente','Aula','Turno','Hora Firma','PIN'];
+        ? ['Origen','Fecha','Aula','Turno','Bedel','Sub-Bedel','F.E.','Presentes','Ausentes','Novedades']
+        : ['Origen','Fecha','Docente','Aula','Turno','Hora Firma','PIN'];
 
+    const celdaOrigen = r => `<td><span class="chip">${_esc(r.origen || '')}</span></td>`;
     const filasTr = d.filas.map(r => {
         if (tipo === 'minutas') {
             return `<tr>
+                ${celdaOrigen(r)}
                 <td style="font-family:'DM Mono',monospace;font-size:.85em;">${r.fecha || ''}</td>
                 <td><strong>${r.aula || ''}</strong></td>
                 <td><span class="chip">${r.turno || ''}</span></td>
@@ -2794,6 +2862,7 @@ async function consultarArchivo() {
             </tr>`;
         }
         return `<tr>
+            ${celdaOrigen(r)}
             <td style="font-family:'DM Mono',monospace;font-size:.85em;">${r.fecha || ''}</td>
             <td><strong>${_esc(r.docente || '—')}</strong></td>
             <td>${r.aula || ''}</td>
@@ -2820,7 +2889,7 @@ async function exportarArchivo() {
     if (!window.SIPA.suToken) return mostrarToast('Requiere TIC.', 'warning');
     const tipo = document.getElementById('arch-tipo').value;
     const anio = document.getElementById('arch-anio').value;
-    const qs = new URLSearchParams({tipo});
+    const qs = new URLSearchParams({tipo, origen: document.getElementById('arch-origen')?.value || 'todo'});
     if (anio) qs.set('anio', anio);
     // Como necesitamos enviar header X-SU-Token, hacemos fetch y luego download del blob
     try {
@@ -3123,6 +3192,33 @@ document.addEventListener('keydown', (e) => {
 
 // ── Consola SQL: botones dinámicos "Ver contenido" de TODAS las tablas ──
 // Se generan desde la BD en vivo (no hardcodeado), así nunca queda desactualizado.
+const _SQL_TABLA_DESC = {
+    adelantos_horario: 'Adelantos de horario de clases',
+    aspirantes: 'Padrón de aspirantes',
+    audit_log: 'Auditoría de acciones',
+    aula_catalogo: 'Catálogo de aulas',
+    aulas_catalogo_bajas: 'Aulas dadas de baja',
+    bedel_link_tokens: 'Tokens de vinculación Telegram',
+    bedeles_telegram: 'Bedeles vinculados a Telegram',
+    bot_comando_log: 'Comandos ejecutados en el bot',
+    calendario_no_actividad: 'Días sin actividad / feriados',
+    config_sistema: 'Configuración del sistema',
+    coberturas_docente: 'Coberturas / reemplazos docentes',
+    cronograma_maestro: 'Cronograma de clases vigente',
+    cronograma_versiones: 'Versiones del cronograma',
+    docentes: 'Docentes registrados',
+    failed_logins: 'Intentos de login fallidos',
+    firmas_archivo: 'Firmas archivadas (histórico)',
+    firmas_docentes: 'Firmas de asistencia docente',
+    justificaciones_ausencia: 'Justificaciones de ausencia',
+    minutas: 'Minutas de aula',
+    minutas_archivo: 'Minutas archivadas (histórico)',
+    pin_overrides: 'PINs temporales por aula',
+    recordatorios_telegram: 'Recordatorios enviados por Telegram',
+    system_log: 'Log del sistema',
+    tipos_novedad: 'Tipos de novedad',
+    usuarios_admin: 'Usuarios administradores',
+};
 let _sqlTablasCargadas = false;
 async function _sqlCargarTablasDinamicas(forzar = false) {
     const cont = document.getElementById('sql-tablas-dinamicas');
@@ -3138,9 +3234,10 @@ async function _sqlCargarTablasDinamicas(forzar = false) {
         if (!r.ok || !Array.isArray(d.rows)) throw new Error(d.error || 'sin datos');
         // Validar identificadores (alfanumérico/underscore) antes de armar el SELECT
         const tablas = d.rows.map(row => String(row[0])).filter(t => /^[a-z_][a-z0-9_]*$/.test(t));
-        const botones = tablas.map(t =>
-            `<button class="sql-ej-btn" onclick="_setSql(this)" data-sql="SELECT * FROM ${t} LIMIT 100">📄 ${t}</button>`
-        ).join('');
+        const botones = tablas.map(t => {
+            const desc = _SQL_TABLA_DESC[t] || 'Tabla del sistema';
+            return `<button class="sql-ej-btn" onclick="_setSql(this)" title="${desc}" data-sql="SELECT * FROM ${t} LIMIT 100">📄 ${t}<small style="display:block;font-weight:400;opacity:.75;font-size:.8em;">${desc}</small></button>`;
+        }).join('');
         cont.innerHTML = `<div class="sql-ej-grupo-titulo">📂 Ver contenido de tablas (${tablas.length}) — SELECT *</div>${botones}`;
         _sqlTablasCargadas = true;
     } catch (e) {
@@ -4301,19 +4398,43 @@ async function cargarAulasCronograma() {
     if (!select) return;
     const turno = document.getElementById('c-turno')?.value || '';
     const seleccionado = select.value;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
+    select.disabled = true;
+    select.innerHTML = '<option value="">Cargando aulas…</option>';
     try {
         const [catalogoResp, configResp] = await Promise.all([
-            fetch('/api/aulas_catalogo'),
-            fetch('/api/config_aula'),
+            fetch(`/api/aulas_catalogo?turno=${encodeURIComponent(turno)}`, {
+                signal: controller.signal,
+            }),
+            fetch(`/api/config_aula?turno=${encodeURIComponent(turno)}&solo_aulas=1`, {
+                signal: controller.signal,
+            }),
         ]);
-        if (!catalogoResp.ok || !configResp.ok) throw new Error('No se pudo cargar el listado de aulas');
-        const catalogo = await catalogoResp.json();
-        const configuraciones = await configResp.json();
+        for (const [nombre, response] of [
+            ['catálogo de aulas', catalogoResp],
+            ['cronogramas', configResp],
+        ]) {
+            if (!response.ok) {
+                let detail = '';
+                try {
+                    detail = (await response.json()).error || '';
+                } catch {}
+                throw new Error(detail || `No se pudo cargar ${nombre} (HTTP ${response.status})`);
+            }
+        }
+        const [catalogo, configuraciones] = await Promise.all([
+            catalogoResp.json(),
+            configResp.json(),
+        ]);
+        if (!Array.isArray(catalogo) || !Array.isArray(configuraciones)) {
+            throw new Error('El servidor devolvió un formato de aulas inesperado.');
+        }
         const aulas = new Map();
-        (Array.isArray(catalogo) ? catalogo : []).forEach(a => {
+        catalogo.forEach(a => {
             if (!turno || a.turno === turno) aulas.set(`${a.aula}|${a.turno}`, a);
         });
-        (Array.isArray(configuraciones) ? configuraciones : []).forEach(b => {
+        configuraciones.forEach(b => {
             if (!turno || b.turno === turno) {
                 const key = `${b.aula}|${b.turno}`;
                 if (!aulas.has(key)) aulas.set(key, {
@@ -4328,10 +4449,23 @@ async function cargarAulasCronograma() {
             opciones.map(a => `<option value="${escapeHTML(a.aula)}" data-turno="${escapeHTML(a.turno)}" data-nombre="${escapeHTML(a.nombre || '')}">Aula ${escapeHTML(a.aula)} — ${escapeHTML(a.nombre || 'Sin nombre')} (${escapeHTML(a.turno)})</option>`).join('');
         if (opciones.some(a => a.aula === seleccionado)) select.value = seleccionado;
         if (!select.value && opciones.length) select.value = opciones[0].aula;
+        if (!opciones.length) {
+            select.innerHTML = '<option value="">No hay aulas para este turno</option>';
+            document.getElementById('body-config').innerHTML = '';
+            return;
+        }
+        select.disabled = false;
         await cargarConfigParaEditar();
     } catch (e) {
-        select.innerHTML = '<option value="">No se pudieron cargar las aulas</option>';
-        mostrarToast(`Error cargando aulas: ${e.message}`, 'error');
+        const mensaje = e.name === 'AbortError'
+            ? 'La consulta de aulas superó los 15 segundos. Verifique la conexión con la base de datos e intente nuevamente.'
+            : `Error cargando aulas: ${e.message}`;
+        select.innerHTML = `<option value="">${escapeHTML(mensaje)}</option>`;
+        mostrarToast(mensaje, 'error');
+        console.error('[cargarAulasCronograma]', e);
+    } finally {
+        clearTimeout(timeout);
+        select.disabled = false;
     }
 }
 
@@ -4535,8 +4669,10 @@ async function cargarInasistencias() {
 
     try {
         const url = `/api/inasistencias?desde=${desde}&hasta=${hasta}&turno=${turno}&incluir_justificadas=${incJust}`;
-        const r   = await fetch(url);
-        const data = r.ok ? await r.json() : [];
+        const r   = await fetch(url, { headers: _headersCalendario() });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+        if (!Array.isArray(data)) throw new Error('La respuesta de inasistencias no tiene el formato esperado.');
 
         const totalAus  = data.filter(x => x.estado === 'ausente').length;
         const totalJust = data.filter(x => x.estado === 'justificado').length;

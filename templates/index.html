@@ -4,7 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>S.I.P.A. — Sistema Integral de Partes de Aula · GNA</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/estilos.css') }}?v=5.7">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/estilos.css') }}?v=5.8">
+    <link rel="icon" type="image/png" href="{{ url_for('static', filename='img/logo-tic.png') }}">
 
     <!-- Chart.js para Dashboard del SU (CDN cacheable) -->
     <script src="{{ url_for('static', filename='js/chart.umd.min.js') }}?v=4.2" defer></script>
@@ -894,6 +895,10 @@
                             Catálogo oficial 2026. La aplicación usa esta identificación al validar el PIN,
                             mostrar el aula y asociar los cronogramas importados.
                         </p>
+                        <p style="color:#9a3412;background:#fff7ed;border:1px solid #fed7aa;border-radius:6px;padding:10px 12px;font-size:.9em;">
+                            <strong>Atención:</strong> al eliminar un aula también se elimina su cronograma vigente.
+                            El padrón, las minutas, las firmas docentes y las versiones históricas se conservan.
+                        </p>
                         <div class="grid" style="align-items:flex-end;">
                             <div><label>Turno</label><select id="catalogo-turno" onchange="cargarCatalogoAulas()">
                                 <option value="">Todos</option><option value="TM">Turno Mañana</option>
@@ -904,7 +909,7 @@
                         </div>
                         <div class="table-responsive" style="margin-top:14px;">
                             <table><thead><tr><th>Turno</th><th>Aula</th><th>Nombre</th><th>Año</th><th>Especialidad</th><th>Curso</th><th>Acción</th></tr></thead>
-                            <tbody id="body-catalogo-aulas"><tr><td colspan="6">Cargando…</td></tr></tbody></table>
+                            <tbody id="body-catalogo-aulas"><tr><td colspan="7">Cargando…</td></tr></tbody></table>
                         </div>
                     </div>
                 </div>
@@ -1018,7 +1023,7 @@
 
                     <div class="card" style="border-top:4px solid #0ea5e9;">
                         <h3 class="section-title" style="color:#0ea5e9;border-color:#bae6fd;">🔌 Diagnóstico de Base de Datos</h3>
-                        <p style="color:var(--texto-suave);margin-bottom:18px;">Verifique el estado de PostgreSQL y las <strong>17 tablas operativas</strong> del sistema (+ 2 de archivo si existen).</p>
+                        <p style="color:var(--texto-suave);margin-bottom:18px;">Verifique el estado de PostgreSQL y las <strong>23 tablas operativas</strong> del sistema (+ 2 de archivo si existen).</p>
                         <div class="bd-actions">
                             <button id="btn-verificar-bd" class="btn btn-primary" onclick="verificarConexionBD()">🔌 Verificar Conexión</button>
                             <button id="btn-init-tablas"  class="btn btn-info"    onclick="inicializarTablas()">🗄️ Inicializar Tablas</button>
@@ -1165,6 +1170,13 @@
                                 <select id="arch-tipo" onchange="consultarArchivo()">
                                     <option value="minutas">Minutas</option>
                                     <option value="firmas">Firmas docentes</option>
+                                </select>
+                            </div>
+                            <div><label>Origen</label>
+                                <select id="arch-origen" onchange="consultarArchivo()">
+                                    <option value="todo">Archivo + ciclo en curso</option>
+                                    <option value="archivo">Solo archivados</option>
+                                    <option value="actual">Solo ciclo en curso</option>
                                 </select>
                             </div>
                             <div><label>Año</label>
@@ -1892,29 +1904,8 @@ ayuda - ❔ Manual completo</pre>
     </div>
 </div>
 
-<!-- Command Palette (Ctrl+K) -->
-<div id="cmd-palette-overlay" class="cmd-overlay" onclick="if(event.target===this)cerrarCmdPalette()">
-    <div class="cmd-modal" role="dialog">
-        <div class="cmd-search">
-            <span class="cmd-search-icon">🔍</span>
-            <input id="cmd-input" type="text"
-                   placeholder="Buscar acciones, aulas, docentes…"
-                   oninput="_filtrarCmd()"
-                   onkeydown="_navegarCmd(event)"
-                   autocomplete="off">
-            <kbd class="cmd-search-hint">ESC</kbd>
-        </div>
-        <div id="cmd-results" class="cmd-results"></div>
-        <div class="cmd-footer">
-            <span><kbd>↑↓</kbd> navegar</span>
-            <span><kbd>Enter</kbd> ejecutar</span>
-            <span><kbd>Esc</kbd> cerrar</span>
-        </div>
-    </div>
-</div>
-
 <!-- Botón flotante de Acceso Técnico (Super Usuario / TIC) -->
-<button id="btn-acceso-su" class="btn-acceso-su" onclick="abrirModalSU()"
+<button id="btn-acceso-su" class="btn-acceso-su" style="display:none" onclick="abrirModalSU()"
         title="Acceso Técnico · Personal de TIC">
     <span class="btn-acceso-su-icon">⚙</span>
     <span class="btn-acceso-su-label">Acceso Técnico</span>
@@ -2040,10 +2031,10 @@ ayuda - ❔ Manual completo</pre>
     <div class="developer-footer-location"><span aria-hidden="true">&lt;/&gt; with</span> <span class="developer-footer-heart" aria-label="amor">♥</span> <span>en Argentina</span></div>
 </footer>
 
-<script src="{{ url_for('static', filename='js/main.js') }}?v=5.14"></script>
+<script src="{{ url_for('static', filename='js/main.js') }}?v=5.15"></script>
 <script src="{{ url_for('static', filename='js/bedelia.js') }}?v=5.9"></script>
 <script src="{{ url_for('static', filename='js/docente.js') }}?v=5.7"></script>
-<script src="{{ url_for('static', filename='js/admin.js') }}?v=6.24"></script>
+<script src="{{ url_for('static', filename='js/admin.js') }}?v=6.29"></script>
 
 <script>
 /* ── INICIALIZACIÓN EXTRA ── */

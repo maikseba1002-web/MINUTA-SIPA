@@ -12,7 +12,7 @@
    - v3.0 → Bcrypt, dashboard histórico, PDF, offline queue, logs JSON, TG health
    ============================================================ */
 
-const VERSION   = 'sipa-v6.4';
+const VERSION   = 'sipa-v6.5';
 const CACHE_STATIC = `${VERSION}-static`;
 const CACHE_DYN    = `${VERSION}-dynamic`;
 

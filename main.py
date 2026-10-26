@@ -76,26 +76,32 @@ DB_CONFIG_FILE = os.path.join(
 
 def _default_db_config():
     return {
-        'host':     os.getenv("DB_HOST", "localhost"),
-        'port':     os.getenv("DB_PORT", "5432"),
-        'dbname':   os.getenv("DB_NAME", "sistema_escuadron"),
-        'user':     os.getenv("DB_USER", "postgres"),
-        'password': os.getenv("DB_PASS", "1982"),
+        'host':     os.getenv("DB_HOST"),
+        'port':     os.getenv("DB_PORT"),
+        'dbname':   os.getenv("DB_NAME"),
+        'user':     os.getenv("DB_USER"),
+        'password': os.getenv("DB_PASS"),
     }
 
 
 def _load_db_config():
-    """Lee la conexión activa: archivo JSON si existe, sino .env / default."""
+    """Lee la conexión: defaults, archivo local y variables de entorno."""
+    cfg = {
+        'host': 'localhost',
+        'port': '5432',
+        'dbname': 'sistema_escuadron',
+        'user': 'postgres',
+        'password': '',
+    }
     if os.path.exists(DB_CONFIG_FILE):
         try:
             with open(DB_CONFIG_FILE, 'r', encoding='utf-8') as f:
-                cfg = json.load(f)
-            base = _default_db_config()
-            base.update({k: v for k, v in cfg.items() if v not in (None, '')})
-            return base
+                file_cfg = json.load(f)
+            cfg.update({k: v for k, v in file_cfg.items() if v not in (None, '')})
         except Exception as e:
             print(f"[SIPA] No se pudo leer {DB_CONFIG_FILE}: {e}")
-    return _default_db_config()
+    cfg.update({k: v for k, v in _default_db_config().items() if v not in (None, '')})
+    return cfg
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -166,10 +172,14 @@ def _catalogo_aulas_oficial() -> list[dict]:
 def _sembrar_catalogo_aulas(conn):
     """Inserta la distribución oficial sin borrar personalizaciones existentes."""
     with conn.cursor() as cur:
+        cur.execute("SELECT aula, turno FROM aulas_catalogo_bajas")
+        aulas_bajas = set(cur.fetchall())
         # Las planillas pueden escribir "9" y la documentación "9T": el turno
         # ya desambigua ambos casos, por eso el catálogo usa el número canónico.
         cur.execute("DELETE FROM aula_catalogo WHERE turno='TT' AND aula ~ '^[0-9]+T$'")
         for r in _catalogo_aulas_oficial():
+            if (r['aula'], r['turno']) in aulas_bajas:
+                continue
             cur.execute("""
                 INSERT INTO aula_catalogo
                     (aula, turno, nombre, anio, especialidad, curso, aliases, fuente, actualizado)
@@ -367,6 +377,12 @@ def init_db():
         aliases      JSONB,
         fuente       VARCHAR(250),
         actualizado  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (aula, turno)
+    );
+    CREATE TABLE IF NOT EXISTS aulas_catalogo_bajas (
+        aula         VARCHAR(50) NOT NULL,
+        turno        VARCHAR(20) NOT NULL,
+        eliminado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (aula, turno)
     );
     CREATE TABLE IF NOT EXISTS cronograma_maestro (
@@ -1025,12 +1041,12 @@ SU_PASSWORD_HASH = os.getenv(
     hashlib.sha256((SU_SALT + "SU_CboCuello_TIC_2026!" + SU_SALT).encode()).hexdigest()
 )
 
-# Hash para la clave de Plana Mayor (rol estándar de Administración)
-# Default: "1234" — debe cambiarse vía env en producción.
+# Hash para la clave vigente de Plana Mayor. Los valores predeterminados permiten
+# iniciar sin .env; pueden reemplazarse con variables de entorno en producción.
 ADMIN_SALT = os.getenv("ADMIN_SALT", "SIPA_GNA_2026_AdminSalt_v1")
 ADMIN_PASSWORD_HASH = os.getenv(
     "ADMIN_PASSWORD_HASH",
-    hashlib.sha256((ADMIN_SALT + "1234" + ADMIN_SALT).encode()).hexdigest()
+    "2f26e9a17402ae1fc04bb36880bbb6e6459a4e72d4bbff7a28bd112f340efb5b"
 )
 
 # Tokens activos en memoria (en producción esto iría a una tabla de sesiones)
@@ -2379,12 +2395,14 @@ def diagnostico():
     tablas = [
         # Datos académicos
         'aula_catalogo', 'cronograma_maestro', 'cronograma_versiones', 'aspirantes', 'tipos_novedad', 'docentes',
-        # Operatividad diaria
-        'minutas', 'firmas_docentes', 'justificaciones_ausencia', 'pin_overrides',
-        # Seguridad y auditoría
-        'usuarios_admin', 'audit_log', 'failed_logins', 'system_log',
-        # Configuración
-        'config_sistema',
+                'aulas_catalogo_bajas', 'coberturas_docente',
+                # Operatividad diaria
+                'minutas', 'firmas_docentes', 'justificaciones_ausencia', 'pin_overrides',
+                'adelantos_horario',
+                # Seguridad y auditoría
+                'usuarios_admin', 'audit_log', 'failed_logins', 'system_log',
+                # Configuración
+                'config_sistema', 'calendario_no_actividad',
         # Telegram / Bot
         'bedeles_telegram', 'bedel_link_tokens', 'recordatorios_telegram', 'bot_comando_log',
     ]
@@ -2677,6 +2695,16 @@ def actualizar_aula_catalogo():
             return jsonify({'error': 'El aula original no existe'}), 404
         if (aula, turno) != (original_aula, original_turno):
             with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM aulas_catalogo_bajas WHERE aula=%s AND turno=%s",
+                    (aula, turno)
+                )
+                cur.execute("""
+                    INSERT INTO aulas_catalogo_bajas (aula, turno, eliminado_en)
+                    VALUES (%s, %s, CURRENT_TIMESTAMP)
+                    ON CONFLICT (aula, turno)
+                    DO UPDATE SET eliminado_en=CURRENT_TIMESTAMP
+                """, (original_aula, original_turno))
                 cur.execute("""
                     UPDATE cronograma_maestro
                     SET aula=%s, turno=%s
@@ -2696,6 +2724,67 @@ def actualizar_aula_catalogo():
     except Exception as e:
         conn.rollback()
         return jsonify({'error': str(e)}), 500
+    finally:
+        conn.close()
+
+
+@app.route('/api/aulas_catalogo/<aula>/<turno>', methods=['DELETE'])
+def eliminar_aula_catalogo(aula, turno):
+    err = _exigir_su(request)
+    if err:
+        return err
+    aula = aula.strip().upper()
+    turno = turno.strip().upper()
+    if not aula or len(aula) > 50:
+        return jsonify({'error': 'Aula inválida.'}), 400
+    if turno not in ('TM', 'TT'):
+        return jsonify({'error': 'El turno debe ser TM o TT.'}), 400
+
+    conn = get_db()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                DELETE FROM aula_catalogo
+                WHERE aula=%s AND turno=%s
+                RETURNING nombre
+            """, (aula, turno))
+            fila = cur.fetchone()
+            if not fila:
+                conn.rollback()
+                return jsonify({'error': 'El aula ya no existe en el catálogo.'}), 404
+            cur.execute(
+                "DELETE FROM cronograma_maestro WHERE aula=%s AND turno=%s",
+                (aula, turno)
+            )
+            cronogramas_eliminados = cur.rowcount
+            cur.execute("""
+                INSERT INTO aulas_catalogo_bajas (aula, turno, eliminado_en)
+                VALUES (%s, %s, CURRENT_TIMESTAMP)
+                ON CONFLICT (aula, turno)
+                DO UPDATE SET eliminado_en=CURRENT_TIMESTAMP
+            """, (aula, turno))
+        conn.commit()
+        _log_audit(
+            'Super Usuario', 'su', 'ELIMINAR_AULA_CATALOGO',
+            'aula_catalogo', f'{aula}/{turno}',
+            f'nombre={fila[0]}; cronogramas_eliminados={cronogramas_eliminados}'
+        )
+        return jsonify({
+            'msj': 'Aula y cronograma vigente eliminados.',
+            'aula': aula,
+            'turno': turno,
+            'cronogramas_eliminados': cronogramas_eliminados,
+            'datos_conservados': [
+                'padrón de aspirantes',
+                'minutas',
+                'firmas docentes',
+                'versiones históricas del cronograma',
+            ],
+        })
+    except Exception as e:
+        conn.rollback()
+        print(f"[eliminar_aula_catalogo] ERROR: {e}\n{_traceback.format_exc()}")
+        return jsonify({'error': f'{type(e).__name__}: {e}'}), 500
     finally:
         conn.close()
 
@@ -5602,13 +5691,37 @@ def adelantos_horario_dia():
 
 @app.route('/api/config_aula', methods=['GET'])
 def get_config_aula_all():
+    turno = (request.args.get('turno') or '').strip().upper()
+    solo_aulas = request.args.get('solo_aulas') == '1'
+    if turno and turno not in ('TM', 'TT'):
+        return jsonify({'error': 'El turno debe ser TM o TT.'}), 400
     conn = get_db()
     try:
         with conn.cursor() as cur:
-            cur.execute(
-                "SELECT aula, turno, config_json FROM cronograma_maestro "
-                "ORDER BY turno, aula"
-            )
+            if solo_aulas:
+                if turno:
+                    cur.execute(
+                        "SELECT DISTINCT aula, turno FROM cronograma_maestro "
+                        "WHERE turno=%s ORDER BY turno, aula",
+                        (turno,)
+                    )
+                else:
+                    cur.execute(
+                        "SELECT DISTINCT aula, turno FROM cronograma_maestro "
+                        "ORDER BY turno, aula"
+                    )
+                return jsonify([{'aula': row[0], 'turno': row[1]} for row in cur.fetchall()])
+            elif turno:
+                cur.execute(
+                    "SELECT aula, turno, config_json FROM cronograma_maestro "
+                    "WHERE turno=%s ORDER BY turno, aula",
+                    (turno,)
+                )
+            else:
+                cur.execute(
+                    "SELECT aula, turno, config_json FROM cronograma_maestro "
+                    "ORDER BY turno, aula"
+                )
             rows = cur.fetchall()
         resultado = []
         for aula, turno, config in rows:
@@ -5677,6 +5790,10 @@ def guardar_config_aula():
     conn = get_db()
     try:
         with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM aulas_catalogo_bajas WHERE aula=%s AND turno=%s",
+                (aula, turno)
+            )
             _guardar_version_cronograma(cur, aula, turno, motivo='Edición manual', creado_por='Plana Mayor')
             cur.execute("""
                 INSERT INTO cronograma_maestro (aula, turno, config_json)
@@ -9303,6 +9420,18 @@ def _archivo_existe(cur, tabla):
         return False
 
 
+def _fuentes_archivo(cur, tipo, origen):
+    """Tablas a consultar: archivo (ciclos cerrados) y/o operativa (ciclo en curso)."""
+    archivo = 'minutas_archivo' if tipo == 'minutas' else 'firmas_archivo'
+    actual = 'minutas' if tipo == 'minutas' else 'firmas_docentes'
+    fuentes = []
+    if origen in ('archivo', 'todo') and _archivo_existe(cur, archivo):
+        fuentes.append((archivo, 'Archivado'))
+    if origen in ('actual', 'todo'):
+        fuentes.append((actual, 'En curso'))
+    return fuentes
+
+
 @app.route('/api/su/archivo_resumen', methods=['GET'])
 def su_archivo_resumen():
     """Devuelve los años disponibles en las tablas de archivo + conteos."""
@@ -9311,8 +9440,21 @@ def su_archivo_resumen():
     conn = get_db()
     try:
         resumen = {'minutas_archivo': {'existe': False, 'anios': []},
-                   'firmas_archivo':  {'existe': False, 'anios': []}}
+                   'firmas_archivo':  {'existe': False, 'anios': []},
+                   'minutas_actual':  {'existe': True, 'anios': []},
+                   'firmas_actual':   {'existe': True, 'anios': []}}
         with conn.cursor() as cur:
+            for clave, tabla in (('minutas_actual', 'minutas'), ('firmas_actual', 'firmas_docentes')):
+                try:
+                    cur.execute(f"""
+                        SELECT EXTRACT(YEAR FROM fecha)::int AS anio, COUNT(*)
+                        FROM {tabla} GROUP BY anio ORDER BY anio DESC
+                    """)
+                    resumen[clave]['anios'] = [
+                        {'anio': r[0], 'filas': r[1]} for r in cur.fetchall()
+                    ]
+                except Exception:
+                    conn.rollback()
             if _archivo_existe(cur, 'minutas_archivo'):
                 resumen['minutas_archivo']['existe'] = True
                 try:
@@ -9355,26 +9497,33 @@ def su_archivo_consultar():
     aula  = (request.args.get('aula') or '').strip().upper()
     turno = (request.args.get('turno') or '').strip().upper()
     docente = (request.args.get('docente') or '').strip()
-    limit = min(int(request.args.get('limit', 200)), 1000)
+    origen = (request.args.get('origen') or 'todo').lower()
+    try:
+        limit = max(1, min(int(request.args.get('limit', 200)), 1000))
+        anio = int(anio) if anio else None
+    except (ValueError, TypeError):
+        return jsonify({'error': 'Parámetros numéricos inválidos'}), 400
 
     if tipo not in ('minutas', 'firmas'):
         return jsonify({'error': 'tipo inválido (use minutas o firmas)'}), 400
+    if origen not in ('archivo', 'actual', 'todo'):
+        return jsonify({'error': 'origen inválido'}), 400
 
-    tabla = 'minutas_archivo' if tipo == 'minutas' else 'firmas_archivo'
     conn = get_db()
     try:
         with conn.cursor() as cur:
-            if not _archivo_existe(cur, tabla):
+            fuentes = _fuentes_archivo(cur, tipo, origen)
+            if not fuentes:
                 return jsonify({
                     'filas': [],
-                    'mensaje': f'La tabla {tabla} no existe aún. Archive primero un ciclo lectivo desde Configuración → Peligro.'
+                    'mensaje': 'No hay ciclos archivados aún. Archive un ciclo desde Configuración → Peligro.'
                 })
 
             filtros = []
             params  = []
             if anio:
                 filtros.append('EXTRACT(YEAR FROM fecha) = %s')
-                params.append(int(anio))
+                params.append(anio)
             if aula:
                 filtros.append('aula = %s'); params.append(aula)
             if turno:
@@ -9383,24 +9532,31 @@ def su_archivo_consultar():
                 filtros.append('docente ILIKE %s'); params.append(f'%{docente}%')
             where = (' WHERE ' + ' AND '.join(filtros)) if filtros else ''
 
-            if tipo == 'minutas':
-                cur.execute(f"""
-                    SELECT id, aula, fecha::text, turno, bedel, sub_bedel,
-                           fe, presentes, cant_ausentes, novedades
-                    FROM minutas_archivo {where}
-                    ORDER BY fecha DESC, aula
-                    LIMIT %s
-                """, params + [limit])
-            else:
-                cur.execute(f"""
-                    SELECT id, docente, aula, turno, fecha::text,
-                           hora_firma::text, pin_usado
-                    FROM firmas_archivo {where}
-                    ORDER BY fecha DESC, hora_firma
-                    LIMIT %s
-                """, params + [limit])
-            cols = [c[0] for c in cur.description]
-            filas = [dict(zip(cols, r)) for r in cur.fetchall()]
+            filas = []
+            for tabla, etiqueta in fuentes:
+                if tipo == 'minutas':
+                    cur.execute(f"""
+                        SELECT id, aula, fecha::text, turno, bedel, sub_bedel,
+                               fe, presentes, cant_ausentes, novedades
+                        FROM {tabla} {where}
+                        ORDER BY fecha DESC, aula
+                        LIMIT %s
+                    """, params + [limit])
+                else:
+                    cur.execute(f"""
+                        SELECT id, docente, aula, turno, fecha::text,
+                               hora_firma::text, pin_usado
+                        FROM {tabla} {where}
+                        ORDER BY fecha DESC, hora_firma
+                        LIMIT %s
+                    """, params + [limit])
+                cols = [c[0] for c in cur.description]
+                for r in cur.fetchall():
+                    fila = dict(zip(cols, r))
+                    fila['origen'] = etiqueta
+                    filas.append(fila)
+            filas.sort(key=lambda f: (f.get('fecha') or '', f.get('hora_firma') or ''), reverse=True)
+            filas = filas[:limit]
         return jsonify({'filas': filas, 'total': len(filas), 'limit': limit})
     finally:
         conn.close()
@@ -9413,37 +9569,47 @@ def su_archivo_export():
     if err: return err
     tipo = (request.args.get('tipo') or 'minutas').lower()
     anio = request.args.get('anio')
+    origen = (request.args.get('origen') or 'todo').lower()
     if tipo not in ('minutas', 'firmas'):
         return jsonify({'error': 'tipo inválido'}), 400
+    if origen not in ('archivo', 'actual', 'todo'):
+        return jsonify({'error': 'origen inválido'}), 400
+    try:
+        anio = int(anio) if anio else None
+    except (ValueError, TypeError):
+        return jsonify({'error': 'Año inválido'}), 400
 
-    tabla = 'minutas_archivo' if tipo == 'minutas' else 'firmas_archivo'
+    tabla = f'{tipo}:{origen}'
     conn = get_db()
     try:
         with conn.cursor() as cur:
-            if not _archivo_existe(cur, tabla):
-                return jsonify({'error': f'{tabla} no existe aún'}), 404
+            fuentes = _fuentes_archivo(cur, tipo, origen)
+            if not fuentes:
+                return jsonify({'error': 'No hay datos archivados para exportar'}), 404
+            where = 'WHERE EXTRACT(YEAR FROM fecha) = %s' if anio else ''
+            params = [anio] if anio else []
+            filas = []
+            for t, etiqueta in fuentes:
+                if tipo == 'minutas':
+                    cur.execute(f"""
+                        SELECT fecha::text, aula, turno, bedel, sub_bedel,
+                               fe, presentes, cant_ausentes, novedades
+                        FROM {t} {where}
+                        ORDER BY fecha, aula
+                    """, params)
+                else:
+                    cur.execute(f"""
+                        SELECT fecha::text, docente, aula, turno,
+                               hora_firma::text, pin_usado
+                        FROM {t} {where}
+                        ORDER BY fecha, hora_firma
+                    """, params)
+                filas.extend(list(r) + [etiqueta] for r in cur.fetchall())
             if tipo == 'minutas':
-                where = 'WHERE EXTRACT(YEAR FROM fecha) = %s' if anio else ''
-                params = [int(anio)] if anio else []
-                cur.execute(f"""
-                    SELECT fecha::text, aula, turno, bedel, sub_bedel,
-                           fe, presentes, cant_ausentes, novedades
-                    FROM minutas_archivo {where}
-                    ORDER BY fecha, aula
-                """, params)
                 headers = ['Fecha','Aula','Turno','Bedel','Sub-Bedel',
-                          'FE','Presentes','Ausentes','Novedades']
+                          'FE','Presentes','Ausentes','Novedades','Origen']
             else:
-                where = 'WHERE EXTRACT(YEAR FROM fecha) = %s' if anio else ''
-                params = [int(anio)] if anio else []
-                cur.execute(f"""
-                    SELECT fecha::text, docente, aula, turno,
-                           hora_firma::text, pin_usado
-                    FROM firmas_archivo {where}
-                    ORDER BY fecha, hora_firma
-                """, params)
-                headers = ['Fecha','Docente','Aula','Turno','Hora Firma','PIN']
-            filas = cur.fetchall()
+                headers = ['Fecha','Docente','Aula','Turno','Hora Firma','PIN','Origen']
         si = io.StringIO()
         si.write('﻿')
         writer = csv.writer(si, delimiter=';')

@@ -47,19 +47,13 @@ function _ocultarBotonInstalar() {
     document.getElementById('pwa-install-btn')?.remove();
 }
 
-// ── TEMA CLARO / OSCURO / AUTO ───────────────────────────────
-// Preferencia guardada en localStorage. 'auto' usa hora del día.
+// ── TEMA CLARO / OSCURO ──────────────────────────────────────
+// Preferencia guardada en localStorage (por defecto claro).
 function aplicarTema(modo) {
     const root = document.documentElement;
-    if (modo === 'dark') {
-        root.setAttribute('data-theme', 'dark');
-    } else if (modo === 'light') {
-        root.removeAttribute('data-theme');
-    } else { // 'auto'
-        const h = new Date().getHours();
-        if (h < 7 || h >= 19) root.setAttribute('data-theme', 'dark');
-        else                  root.removeAttribute('data-theme');
-    }
+    if (modo !== 'dark') modo = 'light';
+    if (modo === 'dark') root.setAttribute('data-theme', 'dark');
+    else                 root.removeAttribute('data-theme');
     localStorage.setItem('sipa_theme', modo);
     _actualizarBotonTema(modo);
 }
@@ -67,16 +61,12 @@ function aplicarTema(modo) {
 function _actualizarBotonTema(modo) {
     const btn = document.getElementById('theme-toggle-btn');
     if (!btn) return;
-    const labels = { light: '☀️', dark: '🌙', auto: '🖥️' };
-    btn.textContent = labels[modo] || '🖥️';
-    btn.title = `Tema: ${modo === 'auto' ? 'automático' : modo === 'dark' ? 'oscuro' : 'claro'} (click para cambiar)`;
+    btn.textContent = modo === 'dark' ? '🌙' : '☀️';
+    btn.title = `Tema: ${modo === 'dark' ? 'oscuro' : 'claro'} (click para cambiar)`;
 }
 
 function _toggleTema() {
-    const actual = localStorage.getItem('sipa_theme') || 'auto';
-    const orden = ['auto', 'light', 'dark'];
-    const sig = orden[(orden.indexOf(actual) + 1) % orden.length];
-    aplicarTema(sig);
+    aplicarTema(localStorage.getItem('sipa_theme') === 'dark' ? 'light' : 'dark');
 }
 
 function _instalarBotonTema() {
@@ -89,124 +79,8 @@ function _instalarBotonTema() {
     const slot = document.getElementById('theme-toggle-slot');
     if (slot) slot.appendChild(btn);
     else      document.body.appendChild(btn);
-    const guardado = localStorage.getItem('sipa_theme') || 'auto';
-    aplicarTema(guardado);
+    aplicarTema(localStorage.getItem('sipa_theme'));
 }
-
-// ══════════════════════════════════════════════════════════
-// COMMAND PALETTE (Ctrl+K / Cmd+K)
-// ══════════════════════════════════════════════════════════
-const _CMD_LIST = [
-    // Navegación
-    { ic:'📝', txt:'Ir a Bedelía',          kw:'bedel pin diaria', fn: () => seleccionarPortal('bedel') },
-    { ic:'🖋️', txt:'Ir a Portal Docente',   kw:'docente firmar profesor', fn: () => seleccionarPortal('docente') },
-    { ic:'🛡️', txt:'Ir a Plana Mayor',      kw:'admin plana mayor monitor', fn: () => seleccionarPortal('admin') },
-    { ic:'🔒', txt:'Acceso TIC / Súper Usuario', kw:'tic super soporte', fn: () => seleccionarPortal('tic') },
-    { ic:'🏠', txt:'Volver al Inicio',      kw:'home inicio', fn: () => volverInicio() },
-
-    // Tema
-    { ic:'🌙', txt:'Tema oscuro',           kw:'dark night', fn: () => aplicarTema('dark') },
-    { ic:'☀️', txt:'Tema claro',            kw:'light day', fn: () => aplicarTema('light') },
-    { ic:'🖥️', txt:'Tema automático',       kw:'auto sistema',  fn: () => aplicarTema('auto') },
-
-    // Atajos comunes
-    { ic:'🔄', txt:'Refrescar Monitor Táctico', kw:'monitor refresh refrescar firmas', fn: () => { typeof refrescarMonitor === 'function' && refrescarMonitor(); } },
-    { ic:'🔑', txt:'Cargar / Generar PINes Diarios', kw:'pin pines llave', fn: () => { typeof cargarPinesOperativos === 'function' && cargarPinesOperativos(); } },
-    { ic:'❌', txt:'Ver Registro de Inasistencias', kw:'inasistencias falta ausente', fn: () => { typeof mostrarMonitorTab === 'function' && _navAdmin('admin-registro'); setTimeout(()=>{document.querySelector('[onclick*=mon-inasistencias]')?.click();}, 150); } },
-    { ic:'📊', txt:'Ver Auditoría Individual',   kw:'auditoria docente buscar', fn: () => { _navAdmin('admin-registro'); setTimeout(()=>{document.querySelector('[onclick*=mon-auditoria]')?.click();}, 150); } },
-    { ic:'📥', txt:'Exportar reporte de inasistencias', kw:'csv exportar reporte', fn: () => { typeof exportarInasistencias === 'function' && exportarInasistencias(); } },
-    { ic:'🔌', txt:'Verificar Base de Datos',    kw:'bd verificar diagnostico', fn: () => { typeof verificarConexionBD === 'function' && verificarConexionBD(); } },
-    { ic:'💾', txt:'Descargar Backup',           kw:'backup respaldo descargar', fn: () => { typeof descargarBackup === 'function' && descargarBackup(); } },
-    { ic:'🛡️', txt:'Audit Log (Trazabilidad)',   kw:'audit log trazabilidad', fn: () => { _navAdmin('admin-config'); setTimeout(()=>{document.querySelector('[onclick*=cfg-auditoria]')?.click();}, 150); } },
-    { ic:'❤️', txt:'Health Check del Sistema',   kw:'salud health estado', fn: () => { _navAdmin('admin-config'); setTimeout(()=>{document.querySelector('[onclick*=cfg-salud]')?.click();}, 150); } },
-
-    // Sesión
-    { ic:'🚪', txt:'Cerrar Sesión',         kw:'logout salir cerrar', fn: () => cerrarSesionUniversal() },
-];
-
-let _cmdIndex = 0;
-let _cmdFiltrados = [];
-
-function abrirCmdPalette() {
-    const overlay = document.getElementById('cmd-palette-overlay');
-    if (!overlay) return;
-    overlay.classList.add('cmd-overlay--open');
-    document.getElementById('cmd-input').value = '';
-    _cmdIndex = 0;
-    _filtrarCmd();
-    setTimeout(() => document.getElementById('cmd-input').focus(), 30);
-}
-
-function cerrarCmdPalette() {
-    document.getElementById('cmd-palette-overlay')?.classList.remove('cmd-overlay--open');
-}
-
-function _filtrarCmd() {
-    const q = document.getElementById('cmd-input').value.toLowerCase().trim();
-    _cmdFiltrados = !q
-        ? _CMD_LIST
-        : _CMD_LIST.filter(c =>
-            c.txt.toLowerCase().includes(q) ||
-            (c.kw && c.kw.toLowerCase().includes(q))
-        );
-    _cmdIndex = 0;
-    _renderCmd();
-}
-
-function _renderCmd() {
-    const cont = document.getElementById('cmd-results');
-    if (!_cmdFiltrados.length) {
-        cont.innerHTML = '<div class="cmd-empty">Sin coincidencias…</div>';
-        return;
-    }
-    cont.innerHTML = _cmdFiltrados.map((c, i) =>
-        `<div class="cmd-item ${i === _cmdIndex ? 'cmd-item--activo' : ''}"
-              data-idx="${i}"
-              onmouseenter="_cmdIndex=${i};_renderCmd();"
-              onclick="_ejecutarCmd(${i})">
-            <span class="cmd-item-ic">${c.ic}</span>
-            <span class="cmd-item-txt">${c.txt}</span>
-        </div>`
-    ).join('');
-    // Auto-scroll al activo
-    const activo = cont.querySelector('.cmd-item--activo');
-    if (activo) activo.scrollIntoView({ block: 'nearest' });
-}
-
-function _navegarCmd(e) {
-    if (e.key === 'ArrowDown') {
-        e.preventDefault();
-        _cmdIndex = Math.min(_cmdIndex + 1, _cmdFiltrados.length - 1);
-        _renderCmd();
-    } else if (e.key === 'ArrowUp') {
-        e.preventDefault();
-        _cmdIndex = Math.max(_cmdIndex - 1, 0);
-        _renderCmd();
-    } else if (e.key === 'Enter') {
-        e.preventDefault();
-        _ejecutarCmd(_cmdIndex);
-    } else if (e.key === 'Escape') {
-        cerrarCmdPalette();
-    }
-}
-
-function _ejecutarCmd(idx) {
-    const cmd = _cmdFiltrados[idx];
-    if (!cmd) return;
-    cerrarCmdPalette();
-    try { cmd.fn(); }
-    catch (e) { console.error('[cmd]', e); mostrarToast('Error: ' + e.message, 'error'); }
-}
-
-// Atajo Ctrl+K / Cmd+K global
-document.addEventListener('keydown', (e) => {
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
-        e.preventDefault();
-        const overlay = document.getElementById('cmd-palette-overlay');
-        if (overlay?.classList.contains('cmd-overlay--open')) cerrarCmdPalette();
-        else abrirCmdPalette();
-    }
-});
 
 // ── ESTADO GLOBAL (reemplaza variables sueltas del HTML original) ──
 window.SIPA = {
@@ -300,6 +174,8 @@ function _aplicarPrivilegiosSU(activo) {
 
     const btnAcceso = document.getElementById('btn-acceso-su');
     if (btnAcceso) {
+        // Solo visible con sesión TIC activa (para poder cerrarla)
+        btnAcceso.style.display = activo ? '' : 'none';
         if (activo) {
             btnAcceso.classList.add('btn-acceso-su--activo');
             btnAcceso.title = 'Sesión TIC activa — click para cerrar';
