@@ -75,6 +75,11 @@ DB_CONFIG_FILE = os.path.join(
 
 
 def _default_db_config():
+    """Obtiene la configuración de base de datos desde variables de entorno.
+
+    Returns:
+        dict: Claves host, port, dbname, user y password (None si la variable no está definida).
+    """
     return {
         'host':     os.getenv("DB_HOST"),
         'port':     os.getenv("DB_PORT"),
@@ -85,7 +90,13 @@ def _default_db_config():
 
 
 def _load_db_config():
-    """Lee la conexión: defaults, archivo local y variables de entorno."""
+    """Construye la configuración de conexión a PostgreSQL.
+
+    Combina, en orden de prioridad creciente: valores por defecto, archivo local DB_CONFIG_FILE y variables de entorno. Ignora valores vacíos o nulos.
+
+    Returns:
+        dict: Claves host, port, dbname, user y password.
+    """
     cfg = {
         'host': 'localhost',
         'port': '5432',
@@ -109,6 +120,11 @@ def _load_db_config():
 # ═══════════════════════════════════════════════════════════════════════════
 
 def get_db():
+    """Abre una nueva conexión a PostgreSQL con la configuración vigente.
+
+    Returns:
+        psycopg2.extensions.connection: Conexión abierta; el llamador debe cerrarla.
+    """
     c = _load_db_config()
     return psycopg2.connect(
         host=c['host'], port=c['port'], dbname=c['dbname'],
@@ -117,10 +133,27 @@ def get_db():
 
 
 def _catalogo_aulas_oficial() -> list[dict]:
-    """Catálogo académico base para resolver aula, curso y especialidad."""
+    """Devuelve el catálogo académico oficial de aulas 2026.
+
+    Returns:
+        list[dict]: Un registro por aula y turno (TM/TT) con aula, turno, nombre, anio, especialidad, curso, aliases y fuente.
+    """
     registros = []
 
     def agregar(turno, aulas, nombre, anio, especialidad, curso):
+        """Agrega al catálogo un registro por cada aula indicada, con sus alias.
+
+        Args:
+            turno: Turno del grupo (TM o TT).
+            aulas: Lista de identificadores de aula (cadenas).
+            nombre: Nombre del curso o división.
+            anio: Año o nivel académico.
+            especialidad: Especialidad del curso.
+            curso: Descripción completa del curso.
+
+        Returns:
+            None. Modifica la lista registros de la función externa.
+        """
         for aula in aulas:
             aliases = [f'AULA {aula}']
             if turno == 'TT':
@@ -170,7 +203,16 @@ def _catalogo_aulas_oficial() -> list[dict]:
 
 
 def _sembrar_catalogo_aulas(conn):
-    """Inserta la distribución oficial sin borrar personalizaciones existentes."""
+    """Inserta o actualiza el catálogo oficial de aulas sin pisar ediciones manuales.
+
+    Elimina aulas de TT con sufijo T, omite las dadas de baja y hace upsert en aula_catalogo; los registros con fuente Edición manual conservan sus datos.
+
+    Args:
+        conn: Conexión psycopg2 abierta; el commit lo realiza el llamador.
+
+    Returns:
+        None.
+    """
     with conn.cursor() as cur:
         cur.execute("SELECT aula, turno FROM aulas_catalogo_bajas")
         aulas_bajas = set(cur.fetchall())
@@ -198,6 +240,16 @@ def _sembrar_catalogo_aulas(conn):
 
 
 def _calendario_cubre_aula(item, aula, turno):
+    """Indica si un cierre del calendario de no actividad aplica a un aula y turno.
+
+    Args:
+        item: Dict con alcance (institucion, turno o aula), turno, aula y excepciones (lista o JSON en texto).
+        aula: Identificador del aula.
+        turno: Turno (TM o TT).
+
+    Returns:
+        bool: True si el cierre cubre el aula y ésta no figura en las excepciones.
+    """
     aula = str(aula or '').strip().upper()
     turno = str(turno or '').strip().upper()
     alcance = item.get('alcance')
@@ -214,6 +266,7 @@ def _calendario_cubre_aula(item, aula, turno):
             excepciones = json.loads(excepciones)
         except (ValueError, TypeError):
             excepciones = []
+    # Una excepción explícita por aula y turno anula el cierre aunque el alcance lo cubra
     return not any(
         isinstance(excepcion, dict)
         and str(excepcion.get('aula', '')).strip().upper() == aula
@@ -223,6 +276,16 @@ def _calendario_cubre_aula(item, aula, turno):
 
 
 def _cargar_calendario_no_actividad(cur, desde, hasta):
+    """Carga los cierres confirmados del calendario de no actividad en un rango de fechas.
+
+    Args:
+        cur: Cursor psycopg2 abierto.
+        desde: Fecha inicial (inclusive).
+        hasta: Fecha final (inclusive).
+
+    Returns:
+        list[dict]: Elementos con fecha (ISO), alcance, turno, aula y excepciones.
+    """
     cur.execute("""
         SELECT fecha::text, alcance, turno, aula, excepciones
         FROM calendario_no_actividad
@@ -238,6 +301,17 @@ def _cargar_calendario_no_actividad(cur, desde, hasta):
 
 
 def _sin_actividad_en_fecha(calendario, fecha, aula, turno):
+    """Determina si hay cierre de actividad para un aula y turno en una fecha.
+
+    Args:
+        calendario: Lista devuelta por _cargar_calendario_no_actividad.
+        fecha: Objeto date/datetime o cadena ISO.
+        aula: Identificador del aula.
+        turno: Turno (TM o TT).
+
+    Returns:
+        bool: True si algún cierre aplica.
+    """
     fecha_iso = fecha.isoformat() if hasattr(fecha, 'isoformat') else str(fecha)
     return any(
         item['fecha'] == fecha_iso and _calendario_cubre_aula(item, aula, turno)
@@ -246,6 +320,15 @@ def _sin_actividad_en_fecha(calendario, fecha, aula, turno):
 
 
 def _cargar_cierres_fecha(cur, fecha):
+    """Carga los cierres confirmados del calendario para una fecha puntual.
+
+    Args:
+        cur: Cursor psycopg2 abierto.
+        fecha: Fecha a consultar.
+
+    Returns:
+        list[dict]: Elementos con fecha, alcance, turno, aula, excepciones y motivo.
+    """
     cur.execute("""
         SELECT fecha::text, alcance, turno, aula, excepciones, motivo
         FROM calendario_no_actividad
@@ -258,6 +341,14 @@ def _cargar_cierres_fecha(cur, fecha):
 
 
 def _usuario_sesion_actual(req):
+    """Resuelve el nombre del usuario administrativo asociado a la solicitud.
+
+    Args:
+        req: Request de Flask; lee los headers X-SU-Token y X-Admin-Token.
+
+    Returns:
+        str: Usuario de la sesión, o TIC si el token SU es válido, o Plana Mayor en otro caso.
+    """
     tokens = (req.headers.get('X-SU-Token'), req.headers.get('X-Admin-Token'))
     for token in tokens:
         meta = _SESIONES_META.get(token or '')
@@ -267,6 +358,14 @@ def _usuario_sesion_actual(req):
 
 
 def _validar_alcance_calendario(d):
+    """Valida y normaliza el cuerpo de un cierre del calendario de no actividad.
+
+    Args:
+        d: Dict con fecha (AAAA-MM-DD), alcance (institucion, turno o aula), turno, aula y motivo (hasta 200 caracteres).
+
+    Returns:
+        tuple: (datos normalizados, None) si es válido, o (None, mensaje de error).
+    """
     if not isinstance(d, dict):
         return None, 'El cuerpo de la solicitud debe ser un objeto JSON.'
     fecha = str(d.get('fecha') or '').strip()
@@ -300,6 +399,14 @@ def _validar_alcance_calendario(d):
 
 
 def _normalizar_horario_cobertura(valor):
+    """Normaliza un rango horario al formato HH:MM-HH:MM.
+
+    Args:
+        valor: Texto con dos horas separadas por guion, por ejemplo 800-945 o 08:00-09:45.
+
+    Returns:
+        str | None: Rango normalizado, o None si el formato u horas son inválidos.
+    """
     partes = re.split(r'\s*[-–]\s*', str(valor or '').strip())
     if len(partes) != 2:
         return None
@@ -317,6 +424,14 @@ def _normalizar_horario_cobertura(valor):
 
 
 def _minutos_horario(hora):
+    """Convierte un rango horario a minutos desde medianoche.
+
+    Args:
+        hora: Rango horario en cualquier formato aceptado por _normalizar_horario_cobertura.
+
+    Returns:
+        tuple[int, int] | None: (inicio, fin) en minutos, o None si es inválido o el fin no es posterior al inicio.
+    """
     normalizada = _normalizar_horario_cobertura(hora)
     if not normalizada:
         return None
@@ -327,17 +442,50 @@ def _minutos_horario(hora):
 
 
 def _intervalos_horarios_solapan(hora_a, hora_b):
+    """Determina si dos rangos horarios se solapan.
+
+    Args:
+        hora_a: Primer rango horario.
+        hora_b: Segundo rango horario.
+
+    Returns:
+        bool: True si ambos son válidos y se superponen.
+    """
     a = _minutos_horario(hora_a)
     b = _minutos_horario(hora_b)
     return bool(a and b and a[0] < b[1] and b[0] < a[1])
 
 
 def _dia_semana_espanol(fecha):
+    """Devuelve el nombre del día de la semana en español.
+
+    Args:
+        fecha: Objeto date o datetime.
+
+    Returns:
+        str: Lunes a Domingo.
+    """
     return ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes',
             'Sábado', 'Domingo'][fecha.weekday()]
 
 
 def _cobertura_coincide_cronograma(cur, fecha, aula, turno, titular, materia, hora):
+    """Verifica que una cobertura corresponda a un bloque del cronograma maestro.
+
+    Compara día, horario, materia y titular sin distinguir tildes ni mayúsculas.
+
+    Args:
+        cur: Cursor psycopg2 abierto.
+        fecha: Fecha de la cobertura.
+        aula: Identificador del aula.
+        turno: Turno (TM o TT).
+        titular: Docente titular esperado.
+        materia: Asignatura esperada.
+        hora: Rango horario de la cobertura.
+
+    Returns:
+        bool: True si existe un bloque coincidente.
+    """
     cur.execute(
         "SELECT config_json FROM cronograma_maestro WHERE aula=%s AND turno=%s",
         (aula, turno),
@@ -366,6 +514,13 @@ def _cobertura_coincide_cronograma(cur, fecha, aula, turno, titular, materia, ho
 
 
 def init_db():
+    """Crea las tablas e índices si no existen y aplica migraciones.
+
+    Cada migración se ejecuta en forma aislada (commit o rollback individual), luego normaliza nombres de docentes del cronograma y siembra el catálogo de aulas. Se invoca al importar el módulo.
+
+    Returns:
+        None. Relanza la excepción si falla la inicialización.
+    """
     DDL = """
     CREATE TABLE IF NOT EXISTS aula_catalogo (
         aula         VARCHAR(50) NOT NULL,
@@ -768,19 +923,15 @@ def init_db():
 
 
 def _normalizar_nombre_docente(raw) -> str:
-    """
-    Normalización defensiva de un nombre de docente antes de guardarlo / consultarlo.
+    """Normaliza un nombre de docente antes de guardarlo o consultarlo.
 
-    Maneja basura común: comas/puntos/espacios sueltos al inicio o final,
-    múltiples espacios internos, NBSP, comas sin espacio (`APELLIDO,NOMBRE`),
-    y prefijos vacíos del estilo `, APELLIDO, NOMBRE`.
+    Elimina basura al inicio y fin, corrige comas y espacios, y lo pasa a mayúsculas para evitar duplicados.
 
-    Garantiza:
-      - Sin coma, punto o espacio al inicio o al final.
-      - Comas internas siempre con un espacio detrás.
-      - Sin espacios dobles.
-      - UPPERCASE consistente para evitar duplicados case-sensitive.
-      - Cadena vacía si el input no es interpretable como nombre.
+    Args:
+        raw: Valor crudo (str o None).
+
+    Returns:
+        str: Nombre normalizado, o cadena vacía si no es interpretable.
     """
     if raw is None:
         return ''
@@ -803,15 +954,27 @@ def _normalizar_nombre_docente(raw) -> str:
 
 
 def _clave_nombre_visible_docente(raw) -> str:
-    """Clave que conserva el orden del nombre usado por horario y firma."""
+    """Genera una clave de comparación que conserva el orden del nombre.
+
+    Args:
+        raw: Nombre crudo del docente.
+
+    Returns:
+        str: Nombre normalizado, sin acentos y en minúsculas (casefold).
+    """
     return _sin_acentos(_normalizar_nombre_docente(raw)).casefold()
 
 
 def _clave_docente_para_match(raw) -> str:
-    """Normaliza los nombres para comparar firmas/cronogramas/justificaciones.
-    Acepta distintas variantes de formato (con coma, sin coma, con espacios extra,
-    con tildes o puntos) y devuelve un identificador estable para comparar.
-    El orden de los tokens no importa: "PEREZ, JUAN" y "JUAN PEREZ" deben coincidir.
+    """Genera una clave estable para comparar nombres de docente.
+
+    No depende del orden de los tokens ni de tildes, comas o puntos: PEREZ, JUAN y JUAN PEREZ coinciden.
+
+    Args:
+        raw: Nombre crudo del docente.
+
+    Returns:
+        str: Tokens en mayúsculas sin acentos, ordenados y unidos por espacio; vacío si no hay nombre.
     """
     s = _normalizar_nombre_docente(raw)
     if not s:
@@ -822,10 +985,15 @@ def _clave_docente_para_match(raw) -> str:
 
 
 def _limpiar_nombres_en_cronograma(conn) -> int:
-    """
-    Recorre cronograma_maestro.config_json y limpia nombres de docentes
-    con basura (comas/espacios al inicio). Idempotente: solo actualiza si cambia.
-    Retorna cantidad de bloques limpiados.
+    """Limpia nombres de docentes en cronograma_maestro.config_json.
+
+    Es idempotente: solo actualiza filas cuyo nombre cambia al normalizarse.
+
+    Args:
+        conn: Conexión psycopg2 abierta; hace commit si hubo cambios.
+
+    Returns:
+        int: Cantidad de bloques modificados.
     """
     patron_sucio = re.compile(r'^[\s,.\-/()]+|[\s,.\-/()]+$')
     cambios = 0
@@ -872,11 +1040,22 @@ _RATE_MAX_INTENTOS = 5       # fallos antes del bloqueo
 _RATE_BLOQUEO_SEG  = 300     # segundos bloqueado (5 min)
 
 def _rl_ip() -> str:
+    """Obtiene la IP del cliente para el control de intentos de login.
+
+    Returns:
+        str: remote_addr de la solicitud, o unknown si no hay contexto.
+    """
     try:    return request.remote_addr or 'unknown'
     except Exception: return 'unknown'
 
 def _rl_verificar() -> bool:
-    """Devuelve True si la IP puede continuar, False si está bloqueada."""
+    """Verifica si la IP actual puede intentar un login.
+
+    Si el bloqueo ya expiró, borra la entrada de la IP.
+
+    Returns:
+        bool: True si puede continuar, False si está bloqueada.
+    """
     ip = _rl_ip()
     ahora = datetime.now()
     entrada = _RATE_LIMIT.get(ip)
@@ -891,6 +1070,13 @@ def _rl_verificar() -> bool:
     return True
 
 def _rl_registrar_fallo():
+    """Registra un intento de login fallido para la IP actual.
+
+    Al alcanzar el máximo de intentos bloquea la IP durante el tiempo configurado y reinicia el contador.
+
+    Returns:
+        None.
+    """
     ip = _rl_ip()
     ahora = datetime.now()
     entrada = _RATE_LIMIT.setdefault(ip, {'intentos': 0, 'bloqueado_hasta': None})
@@ -900,7 +1086,13 @@ def _rl_registrar_fallo():
         entrada['intentos'] = 0  # Resetear contador para el próximo ciclo
 
 def _rl_limpiar_expirados():
-    """Elimina entradas con bloqueo expirado (llamado desde el scheduler)."""
+    """Elimina entradas de rate limiting sin bloqueo vigente.
+
+    Se invoca periódicamente desde el scheduler.
+
+    Returns:
+        None.
+    """
     ahora = datetime.now()
     expirados = [ip for ip, e in list(_RATE_LIMIT.items())
                  if not e.get('bloqueado_hasta') or e['bloqueado_hasta'] < ahora]
@@ -908,7 +1100,11 @@ def _rl_limpiar_expirados():
         _RATE_LIMIT.pop(ip, None)
 
 def _rl_respuesta_bloqueada():
-    """Respuesta JSON estándar para IP bloqueada."""
+    """Arma la respuesta estándar para una IP bloqueada.
+
+    Returns:
+        tuple: (JSON con clave error, HTTP 429).
+    """
     return jsonify({
         'error': f'Demasiados intentos fallidos. Intente nuevamente en {_RATE_BLOQUEO_SEG // 60} minutos.'
     }), 429
@@ -919,6 +1115,17 @@ def _rl_respuesta_bloqueada():
 # ═══════════════════════════════════════════════════════════════════════════
 
 def generar_pin_diario(aula: str, turno: str) -> str:
+    """Calcula el PIN diario de 4 dígitos de un aula y turno.
+
+    Si el Super Usuario definió un override en pin_overrides para la fecha, lo devuelve; si no, deriva el PIN de un hash de fecha, aula y turno.
+
+    Args:
+        aula: Identificador del aula.
+        turno: Turno (TM o TT).
+
+    Returns:
+        str: PIN de 4 dígitos.
+    """
     hoy = datetime.now().strftime('%Y-%m-%d')
     # ¿Hay override manual del Super Usuario para este aula+turno+fecha?
     try:
@@ -936,6 +1143,7 @@ def generar_pin_diario(aula: str, turno: str) -> str:
     except Exception:
         pass  # Si pin_overrides no existe aún, seguimos con el cálculo normal
     semilla = f"{hoy}-{aula.upper()}-{turno}-GNA-2026"
+    # PIN determinístico: la misma fecha, aula y turno generan el mismo código sin almacenarlo
     return str(int(hashlib.md5(semilla.encode()).hexdigest(), 16))[-4:].zfill(4)
 
 
@@ -944,27 +1152,64 @@ def generar_pin_diario(aula: str, turno: str) -> str:
 PASS_SALT = os.getenv("PASS_SALT", "SIPA_GNA_2026_PassSalt_v1")
 
 def hash_password(p: str) -> str:
-    """Hash para docentes y usuarios_admin.
-    Si bcrypt está disponible, genera hash bcrypt (seguro contra brute-force).
-    Si no, cae a SHA256+sal (compatible con instalaciones sin bcrypt)."""
+    """Genera el hash de contraseña para docentes y usuarios_admin.
+
+    Usa bcrypt si está disponible; si no, SHA256 con sal.
+
+    Args:
+        p: Contraseña en texto plano.
+
+    Returns:
+        str: Hash resultante.
+    """
     if BCRYPT_OK:
         return bcrypt.hashpw(p.encode(), bcrypt.gensalt()).decode()
     return hashlib.sha256((PASS_SALT + p + PASS_SALT).encode()).hexdigest()
 
 def _hash_password_sha256(p: str) -> str:
-    """Hash SHA256+sal — mantener para verificar hashes existentes."""
+    """Calcula el hash SHA256 con sal de una contraseña, para verificar hashes existentes.
+
+    Args:
+        p: Contraseña en texto plano.
+
+    Returns:
+        str: Hash hexadecimal.
+    """
     return hashlib.sha256((PASS_SALT + p + PASS_SALT).encode()).hexdigest()
 
 def _hash_password_legacy(p: str) -> str:
-    """Hash sin sal usado antes de la v1.1 — solo para migración en login."""
+    """Calcula el hash SHA256 sin sal usado antes de la v1.1, solo para migración en login.
+
+    Args:
+        p: Contraseña en texto plano.
+
+    Returns:
+        str: Hash hexadecimal.
+    """
     return hashlib.sha256(p.encode()).hexdigest()
 
 def _es_hash_bcrypt(h: str) -> bool:
-    """Detecta si un hash almacenado es bcrypt (empieza con $2b$ o $2a$)."""
+    """Detecta si un hash almacenado es bcrypt.
+
+    Args:
+        h: Hash almacenado.
+
+    Returns:
+        bool: True si empieza con $2b$ o $2a$.
+    """
     return h.startswith('$2b$') or h.startswith('$2a$')
 
 def _validar_password(password: str) -> str | None:
-    """Valida la fortaleza mínima de un password. Devuelve mensaje de error o None si es válido."""
+    """Valida la fortaleza mínima de una contraseña.
+
+    Exige al menos 8 caracteres, una letra y un número.
+
+    Args:
+        password: Contraseña propuesta.
+
+    Returns:
+        str | None: Mensaje de error, o None si es válida.
+    """
     if len(password) < 8:
         return 'La contraseña debe tener al menos 8 caracteres.'
     if not re.search(r'[A-Za-z]', password):
@@ -976,8 +1221,22 @@ def _validar_password(password: str) -> str | None:
 
 def _verificar_y_migrar_hash(conn, tabla: str, campo_hash: str, campo_id: str, id_val,
                               password: str, hash_almacenado: str) -> bool:
-    """Comprueba si el password coincide (bcrypt, SHA256+sal, o legacy) y
-    migra progresivamente al algoritmo más seguro disponible."""
+    """Verifica una contraseña contra su hash y migra el hash al algoritmo más seguro.
+
+    Acepta bcrypt, SHA256 con sal y hash legacy sin sal.
+
+    Args:
+        conn: Conexión psycopg2 abierta.
+        tabla: Tabla que guarda el hash.
+        campo_hash: Columna del hash.
+        campo_id: Columna identificadora.
+        id_val: Valor del identificador del registro.
+        password: Contraseña en texto plano.
+        hash_almacenado: Hash guardado actualmente.
+
+    Returns:
+        bool: True si la contraseña coincide.
+    """
 
     # Prioridad 1: ya es bcrypt → verificar directo
     if _es_hash_bcrypt(hash_almacenado):
@@ -1000,7 +1259,21 @@ def _verificar_y_migrar_hash(conn, tabla: str, campo_hash: str, campo_id: str, i
 
 def _migrar_a_mejor_hash(conn, tabla: str, campo_hash: str, campo_id: str,
                           id_val, password: str):
-    """Migra silenciosamente al hash más seguro disponible (bcrypt si existe)."""
+    """Reemplaza el hash almacenado por uno nuevo con el mejor algoritmo disponible.
+
+    Los errores se ignoran para no impedir el login.
+
+    Args:
+        conn: Conexión psycopg2 abierta.
+        tabla: Tabla que guarda el hash.
+        campo_hash: Columna del hash.
+        campo_id: Columna identificadora.
+        id_val: Valor del identificador del registro.
+        password: Contraseña en texto plano.
+
+    Returns:
+        None.
+    """
     nuevo_hash = hash_password(password)  # usa bcrypt si está disponible
     try:
         with conn.cursor() as cur:
@@ -1014,6 +1287,14 @@ def _migrar_a_mejor_hash(conn, tabla: str, campo_hash: str, campo_id: str,
 
 
 def verificar_pin(pin: str):
+    """Busca el aula y turno cuyo PIN diario coincide con el indicado.
+
+    Args:
+        pin: PIN de 4 dígitos ingresado.
+
+    Returns:
+        tuple: (aula, turno) si coincide, o (None, None).
+    """
     conn = get_db()
     try:
         with conn.cursor() as cur:
@@ -1059,7 +1340,16 @@ _SESIONES_META = {}
 
 
 def _registrar_sesion(tok: str, rol: str, usuario: str):
-    """Guarda metadata al crear un token (login)."""
+    """Guarda los metadatos de una sesión recién creada.
+
+    Args:
+        tok: Token de sesión.
+        rol: Rol del usuario.
+        usuario: Nombre del usuario.
+
+    Returns:
+        None. Registra IP, user agent (200 caracteres) y marcas de login y last_seen.
+    """
     ahora = datetime.now()
     _SESIONES_META[tok] = {
         'rol': rol,
@@ -1072,26 +1362,105 @@ def _registrar_sesion(tok: str, rol: str, usuario: str):
 
 
 def _tocar_sesion(tok: str):
-    """Actualiza last_seen al validar un token."""
+    """Actualiza la marca last_seen de una sesión.
+
+    Args:
+        tok: Token de sesión.
+
+    Returns:
+        None.
+    """
     if tok in _SESIONES_META:
         _SESIONES_META[tok]['last_seen'] = datetime.now().isoformat()
 
 def _su_hash(password: str) -> str:
+    """Calcula el hash SHA256 con sal del Super Usuario.
+
+    Args:
+        password: Contraseña en texto plano.
+
+    Returns:
+        str: Hash hexadecimal.
+    """
     return hashlib.sha256((SU_SALT + password + SU_SALT).encode()).hexdigest()
 
-def _su_token_valido(req) -> bool:
-    tok = req.headers.get('X-SU-Token', '')
-    if not tok or tok not in _SU_TOKENS:
+def _su_firmar_token(exp_ts: int) -> str:
+    """Firma un token de Super Usuario autocontenido con HMAC-SHA256.
+
+    Args:
+        exp_ts: Timestamp de expiración (epoch en segundos).
+
+    Returns:
+        str: Token con formato su.exp.firma.
+    """
+    # La firma depende del hash de la clave SU: cambiarla invalida todos los tokens emitidos
+    sig = hmac.new((SU_SALT + SU_PASSWORD_HASH).encode(), f"su.{exp_ts}".encode(),
+                   hashlib.sha256).hexdigest()
+    return f"su.{exp_ts}.{sig}"
+
+def _su_token_firmado_ok(tok: str) -> bool:
+    """Verifica la firma y expiración de un token de Super Usuario.
+
+    Args:
+        tok: Token con formato su.exp.firma.
+
+    Returns:
+        bool: True si la firma es válida y no expiró.
+    """
+    try:
+        pref, exp_s, sig = tok.split('.', 2)
+        if pref != 'su' or int(exp_s) < datetime.now().timestamp():
+            return False
+        # Comparación en tiempo constante para evitar ataques de timing sobre la firma
+        return hmac.compare_digest(_su_firmar_token(int(exp_s)), tok)
+    except (ValueError, AttributeError):
         return False
-    if _SU_TOKENS[tok] < datetime.now():
-        _SU_TOKENS.pop(tok, None)
-        _SESIONES_META.pop(tok, None)
+
+def _su_token_ok(tok: str) -> bool:
+    """Verifica si un token de Super Usuario es válido.
+
+    Consulta primero los tokens en memoria (eliminando los vencidos) y luego la firma autocontenida.
+
+    Args:
+        tok: Token a validar.
+
+    Returns:
+        bool: True si es válido.
+    """
+    if not tok:
+        return False
+    if tok in _SU_TOKENS:
+        if _SU_TOKENS[tok] < datetime.now():
+            _SU_TOKENS.pop(tok, None)
+            _SESIONES_META.pop(tok, None)
+            return False
+        return True
+    return _su_token_firmado_ok(tok)
+
+def _su_token_valido(req) -> bool:
+    """Valida el token de Super Usuario de la solicitud y actualiza su actividad.
+
+    Args:
+        req: Request de Flask; lee el header X-SU-Token.
+
+    Returns:
+        bool: True si el token es válido.
+    """
+    tok = req.headers.get('X-SU-Token', '')
+    if not _su_token_ok(tok):
         return False
     _tocar_sesion(tok)
     return True
 
 def _exigir_su(req):
-    """Devuelve None si OK, o una respuesta JSON 403 si falla."""
+    """Exige un token de Super Usuario válido.
+
+    Args:
+        req: Request de Flask; lee el header X-SU-Token.
+
+    Returns:
+        None si es válido, o tupla (JSON con error, HTTP 403).
+    """
     if not _su_token_valido(req):
         return jsonify({'error': 'Esta operación requiere autenticación de Super Usuario (TIC).'}), 403
     return None
@@ -1099,6 +1468,14 @@ def _exigir_su(req):
 
 @app.route('/api/su/login', methods=['POST'])
 def su_login():
+    """Inicia sesión como Super Usuario (TIC).
+
+    Args:
+        password: Campo del JSON del body con la contraseña.
+
+    Returns:
+        JSON con token, rol y expira. 400 si falta el password, 403 si es incorrecto y 429 si la IP está bloqueada.
+    """
     if not _rl_verificar():
         return _rl_respuesta_bloqueada()
     d = request.json or {}
@@ -1109,8 +1486,10 @@ def su_login():
         _rl_registrar_fallo()
         _log_failed_login('su', 'Password incorrecto')
         return jsonify({'error': 'Credenciales inválidas. Acceso denegado.'}), 403
-    tok = secrets.token_urlsafe(32)
-    _SU_TOKENS[tok] = datetime.now() + timedelta(hours=4)
+    # Sesión SU de 4 horas, más corta que la de Plana Mayor por su nivel de privilegio
+    expira_dt = datetime.now() + timedelta(hours=4)
+    tok = _su_firmar_token(int(expira_dt.timestamp()))
+    _SU_TOKENS[tok] = expira_dt
     _registrar_sesion(tok, 'super_usuario', 'TIC')
     return jsonify({
         'token':  tok,
@@ -1121,6 +1500,14 @@ def su_login():
 
 @app.route('/api/su/logout', methods=['POST'])
 def su_logout():
+    """Cierra la sesión técnica del Super Usuario.
+
+    Args:
+        X-SU-Token: Header con el token a invalidar.
+
+    Returns:
+        JSON con clave msj.
+    """
     tok = request.headers.get('X-SU-Token', '')
     _SU_TOKENS.pop(tok, None)
     _SESIONES_META.pop(tok, None)
@@ -1129,15 +1516,38 @@ def su_logout():
 
 @app.route('/api/su/validar', methods=['GET'])
 def su_validar():
-    """Permite al frontend confirmar que un token sigue vigente."""
+    """Confirma si un token de Super Usuario sigue vigente.
+
+    Args:
+        X-SU-Token: Header con el token.
+
+    Returns:
+        JSON con la clave valido (bool).
+    """
     return jsonify({'valido': _su_token_valido(request)})
 
 
 # ─── PLANA MAYOR (admin estándar) — login con hash, sin password en JS ───
 def _admin_hash(p: str) -> str:
+    """Calcula el hash SHA256 con sal de la clave maestra de Plana Mayor.
+
+    Args:
+        p: Contraseña en texto plano.
+
+    Returns:
+        str: Hash hexadecimal.
+    """
     return hashlib.sha256((ADMIN_SALT + p + ADMIN_SALT).encode()).hexdigest()
 
 def _admin_token_valido(req) -> bool:
+    """Valida el token de Plana Mayor de la solicitud, eliminándolo si venció.
+
+    Args:
+        req: Request de Flask; lee el header X-Admin-Token.
+
+    Returns:
+        bool: True si el token es válido.
+    """
     tok = req.headers.get('X-Admin-Token', '')
     if not tok or tok not in _ADMIN_TOKENS:
         return False
@@ -1150,6 +1560,14 @@ def _admin_token_valido(req) -> bool:
 
 
 def _docente_token_meta(req):
+    """Obtiene los metadatos de la sesión docente a partir del token.
+
+    Args:
+        req: Request de Flask; lee el header X-Docente-Token.
+
+    Returns:
+        dict | None: Metadatos del docente (id, nombre, es_pgnp, expira), o None si falta o venció.
+    """
     token = req.headers.get('X-Docente-Token', '')
     meta = _DOCENTE_TOKENS.get(token)
     if not meta:
@@ -1163,9 +1581,18 @@ def _docente_token_meta(req):
 
 @app.route('/api/admin/login', methods=['POST'])
 def admin_login():
-    """Login en dos vías:
-       - usuario + password  → busca en usuarios_admin
-       - solo password       → fallback a la clave maestra .env (compat)"""
+    """Inicia sesión como Plana Mayor.
+
+    Con usuario valida contra usuarios_admin (y 2FA TOTP si está activo); sin usuario usa la clave maestra.
+
+    Args:
+        usuario: Campo opcional del JSON del body.
+        password: Campo del JSON del body.
+        codigo_2fa: Campo opcional del JSON del body, código de 6 dígitos.
+
+    Returns:
+        JSON con token, rol, usuario, nombre y debe_cambiar_pass. 400 sin password, 401 si requiere 2FA, 403 si las credenciales son inválidas y 429 si la IP está bloqueada.
+    """
     if not _rl_verificar():
         return _rl_respuesta_bloqueada()
     d = request.json or {}
@@ -1234,6 +1661,14 @@ def admin_login():
 # CRUD de usuarios admin (sólo SU puede gestionar)
 @app.route('/api/su/usuarios_admin', methods=['GET'])
 def su_listar_usuarios_admin():
+    """Lista los usuarios administrativos (solo Super Usuario).
+
+    Args:
+        X-SU-Token: Header con el token de Super Usuario.
+
+    Returns:
+        JSON con la lista de usuarios (id, usuario, nombre, rol, activo, debe_cambiar_pass, creado_por, creado_en, ultimo_login). 403 si no es Super Usuario.
+    """
     err = _exigir_su(request)
     if err: return err
     conn = get_db()
@@ -1262,6 +1697,18 @@ def su_listar_usuarios_admin():
 
 @app.route('/api/su/usuarios_admin', methods=['POST'])
 def su_crear_usuario_admin():
+    """Crea un usuario administrativo (solo Super Usuario).
+
+    Args:
+        X-SU-Token: Header con el token de Super Usuario.
+        usuario: Campo del JSON, 3-40 caracteres en minúsculas, dígitos o ._-.
+        nombre: Campo del JSON, obligatorio.
+        password: Campo opcional del JSON; si falta se genera uno.
+        rol: Campo opcional del JSON (por defecto plana_mayor).
+
+    Returns:
+        JSON con msj y password_inicial. 400 si es inválido, 409 si ya existe y 500 ante error.
+    """
     err = _exigir_su(request)
     if err: return err
     d = request.json or {}
@@ -1297,6 +1744,15 @@ def su_crear_usuario_admin():
 
 @app.route('/api/su/usuarios_admin/<int:uid>', methods=['DELETE'])
 def su_eliminar_usuario_admin(uid):
+    """Elimina un usuario administrativo (solo Super Usuario).
+
+    Args:
+        uid: ID del usuario en la URL.
+        X-SU-Token: Header con el token de Super Usuario.
+
+    Returns:
+        JSON con msj. 404 si no existe y 500 ante error.
+    """
     err = _exigir_su(request)
     if err: return err
     conn = get_db()
@@ -1316,6 +1772,15 @@ def su_eliminar_usuario_admin(uid):
 
 @app.route('/api/su/usuarios_admin/<int:uid>/toggle', methods=['POST'])
 def su_toggle_usuario_admin(uid):
+    """Activa o desactiva un usuario administrativo (solo Super Usuario).
+
+    Args:
+        uid: ID del usuario en la URL.
+        X-SU-Token: Header con el token de Super Usuario.
+
+    Returns:
+        JSON con msj indicando el nuevo estado. 404 si no existe y 500 ante error.
+    """
     err = _exigir_su(request)
     if err: return err
     conn = get_db()
@@ -1335,6 +1800,16 @@ def su_toggle_usuario_admin(uid):
 
 @app.route('/api/su/usuarios_admin/<int:uid>/reset_pass', methods=['POST'])
 def su_reset_usuario_admin(uid):
+    """Resetea la contraseña de un usuario administrativo (solo Super Usuario).
+
+    Args:
+        uid: ID del usuario en la URL.
+        X-SU-Token: Header con el token de Super Usuario.
+        password: Campo opcional del JSON; si falta se genera una aleatoria.
+
+    Returns:
+        JSON con msj y nueva_password; el usuario deberá cambiarla. 400 si no cumple la política, 404 si no existe y 500 ante error.
+    """
     err = _exigir_su(request)
     if err: return err
     nueva = (request.json or {}).get('password') or ''
@@ -1364,6 +1839,14 @@ def su_reset_usuario_admin(uid):
 
 @app.route('/api/admin/logout', methods=['POST'])
 def admin_logout():
+    """Cierra la sesión de Plana Mayor y registra el evento en auditoría.
+
+    Args:
+        X-Admin-Token: Header con el token a invalidar.
+
+    Returns:
+        JSON con clave msj.
+    """
     tok = request.headers.get('X-Admin-Token', '')
     info = _ADMIN_TOKENS.pop(tok+'__user', None)
     _ADMIN_TOKENS.pop(tok, None)
@@ -1374,6 +1857,14 @@ def admin_logout():
 
 @app.route('/api/admin/validar', methods=['GET'])
 def admin_validar():
+    """Confirma si un token de Plana Mayor sigue vigente.
+
+    Args:
+        X-Admin-Token: Header con el token.
+
+    Returns:
+        JSON con la clave valido (bool).
+    """
     return jsonify({'valido': _admin_token_valido(request)})
 
 
@@ -1383,11 +1874,28 @@ def admin_validar():
 import base64, hmac, struct, time as _time
 
 def _totp_b32_generar_secret(longitud_bytes=20):
-    """Genera un secret aleatorio de 20 bytes y lo devuelve en Base32 sin '='."""
+    """Genera un secret TOTP aleatorio.
+
+    Args:
+        longitud_bytes: Cantidad de bytes aleatorios (por defecto 20).
+
+    Returns:
+        str: Secret en Base32 sin padding.
+    """
     return base64.b32encode(secrets.token_bytes(longitud_bytes)).decode().rstrip('=')
 
 def _totp_codigo(secret_b32, paso=30, digitos=6, t=None):
-    """Calcula el código TOTP de 6 dígitos para 'secret_b32' (Base32) según RFC 6238."""
+    """Calcula un código TOTP según RFC 6238.
+
+    Args:
+        secret_b32: Secret en Base32.
+        paso: Duración del intervalo en segundos.
+        digitos: Cantidad de dígitos del código.
+        t: Timestamp en segundos; por defecto el actual.
+
+    Returns:
+        str | None: Código con ceros a la izquierda, o None si el secret es inválido.
+    """
     if t is None: t = _time.time()
     # Reconstruir padding base32
     pad = '=' * ((8 - len(secret_b32) % 8) % 8)
@@ -1398,12 +1906,22 @@ def _totp_codigo(secret_b32, paso=30, digitos=6, t=None):
     contador = int(t // paso)
     msg = struct.pack('>Q', contador)
     h = hmac.new(key, msg, 'sha1').digest()
+    # Truncamiento dinámico de RFC 4226: el último nibble indica desde qué byte extraer 31 bits
     offset = h[-1] & 0x0F
     val = struct.unpack('>I', h[offset:offset+4])[0] & 0x7FFFFFFF
     return str(val % (10 ** digitos)).zfill(digitos)
 
 def _totp_verificar(secret_b32, codigo_usuario, ventana=1):
-    """Verifica que el código coincida (acepta ±1 paso de 30s = ±30s de drift)."""
+    """Verifica un código TOTP tolerando desfase de reloj.
+
+    Args:
+        secret_b32: Secret en Base32.
+        codigo_usuario: Código ingresado por el usuario.
+        ventana: Cantidad de pasos de 30 s admitidos a cada lado.
+
+    Returns:
+        bool: True si el código coincide en la ventana.
+    """
     if not secret_b32 or not codigo_usuario:
         return False
     codigo_usuario = str(codigo_usuario).strip()
@@ -1416,8 +1934,16 @@ def _totp_verificar(secret_b32, codigo_usuario, ventana=1):
 
 @app.route('/api/su/2fa/setup', methods=['POST'])
 def su_2fa_setup():
-    """Genera un secret TOTP para el usuario admin indicado.
-       Devuelve el secret + URL otpauth para escanear con Google Authenticator."""
+    """Genera un secreto TOTP para un usuario admin (inicio de configuración de 2FA).
+
+    Requiere token SU. El 2FA queda desactivado hasta verificar un código.
+
+    Args:
+        uid (int): Campo JSON del body; id del usuario en usuarios_admin.
+
+    Returns:
+        JSON con secret, usuario, nombre, otpauth_url y mensaje. 400 si falta uid, 404 si no existe, 500 ante error de BD.
+    """
     err = _exigir_su(request)
     if err: return err
     d = request.json or {}
@@ -1461,7 +1987,17 @@ def su_2fa_setup():
 
 @app.route('/api/su/2fa/verify', methods=['POST'])
 def su_2fa_verify():
-    """Verifica que el código TOTP es correcto y activa el 2FA para el usuario."""
+    """Verifica un código TOTP y activa el 2FA del usuario.
+
+    Requiere token SU y haber llamado antes a la configuración (secret generado).
+
+    Args:
+        uid (int): Campo JSON del body; id del usuario admin.
+        codigo (str): Campo JSON del body; código TOTP de 6 dígitos.
+
+    Returns:
+        JSON con msj si es correcto; 400 si faltan datos, no hay secret o el código es incorrecto; 500 ante error.
+    """
     err = _exigir_su(request)
     if err: return err
     d = request.json or {}
@@ -1493,6 +2029,16 @@ def su_2fa_verify():
 
 @app.route('/api/su/2fa/disable', methods=['POST'])
 def su_2fa_disable():
+    """Desactiva el 2FA de un usuario admin y borra su secreto TOTP.
+
+    Requiere token SU.
+
+    Args:
+        uid (int): Campo JSON del body; id del usuario admin.
+
+    Returns:
+        JSON con msj de confirmación; 400 si falta uid, 404 si no existe, 500 ante error de BD.
+    """
     err = _exigir_su(request)
     if err: return err
     d = request.json or {}
@@ -1521,15 +2067,34 @@ def su_2fa_disable():
 # HELPERS DE LOGGING (audit + failed logins + sistema)
 # ═══════════════════════════════════════════════════════════════════════════
 def _safe_ip():
+    """Obtiene la IP remota de la request actual sin fallar fuera de contexto.
+
+    Returns:
+        str: IP del cliente o '?' si no está disponible.
+    """
     try:    return request.remote_addr or '?'
     except Exception: return '?'
 
 def _safe_path():
+    """Obtiene el path de la request actual sin fallar fuera de contexto.
+
+    Returns:
+        str: Path de la request o '?' si no está disponible.
+    """
     try:    return request.path or '?'
     except Exception: return '?'
 
 def _log_json(level: str, event: str, **extra):
-    """Emite un log estructurado JSON a stdout (para ELK/Grafana/journald)."""
+    """Emite un log estructurado en JSON por stdout.
+
+    Args:
+        level (str): Nivel del log (INFO, ERROR, etc.).
+        event (str): Nombre del evento.
+        **extra: Campos adicionales; se omiten los valores None.
+
+    Returns:
+        None. Cualquier error de serialización se ignora.
+    """
     entry = {
         'ts': datetime.now().isoformat(),
         'level': level,
@@ -1543,6 +2108,21 @@ def _log_json(level: str, event: str, **extra):
         pass
 
 def _log_audit(usuario, rol, accion, tabla=None, registro_ref=None, detalle=None):
+    """Registra una acción en la tabla audit_log y en el log JSON.
+
+    Nunca propaga excepciones: la auditoría no debe romper la operación.
+
+    Args:
+        usuario (str): Quién realizó la acción.
+        rol (str): Rol del actor.
+        accion (str): Código de la acción.
+        tabla (str, optional): Tabla afectada.
+        registro_ref (str, optional): Referencia del registro afectado.
+        detalle (str, optional): Detalle libre.
+
+    Returns:
+        None.
+    """
     try:
         conn = get_db()
         with conn.cursor() as cur:
@@ -1559,6 +2139,15 @@ def _log_audit(usuario, rol, accion, tabla=None, registro_ref=None, detalle=None
               tabla=tabla, ref=registro_ref, ip=_safe_ip())
 
 def _log_failed_login(tipo, detalle=''):
+    """Registra un intento de login fallido y dispara la alerta de Telegram si corresponde.
+
+    Args:
+        tipo (str): Tipo de login fallido (por ejemplo admin, su, pin).
+        detalle (str): Detalle adicional del intento.
+
+    Returns:
+        None. Los errores se ignoran para no bloquear el login.
+    """
     try:
         conn = get_db()
         with conn.cursor() as cur:
@@ -1577,6 +2166,16 @@ def _log_failed_login(tipo, detalle=''):
         pass
 
 def _log_system(nivel, mensaje, traceback_txt=None):
+    """Guarda un evento en la tabla system_log y en el log JSON.
+
+    Args:
+        nivel (str): Nivel del evento (INFO, ERROR, etc.).
+        mensaje (str): Mensaje; se trunca a 2000 caracteres.
+        traceback_txt (str, optional): Traceback; se trunca a 6000 caracteres.
+
+    Returns:
+        None. Los errores de BD se ignoran.
+    """
     try:
         conn = get_db()
         with conn.cursor() as cur:
@@ -1607,12 +2206,20 @@ _MAINT_BYPASS_PATHS = (
 @app.before_request
 def _check_maintenance_mode():
     # Sólo aplicamos a /api/*
+    """Middleware global que bloquea la API durante el modo mantenimiento.
+
+    Solo aplica a rutas /api/ fuera de la lista de excepciones y sin token SU válido.
+
+    Returns:
+        None para continuar normalmente, o JSON con error y mantenimiento=True con código 503.
+    """
     path = request.path or ''
     if not path.startswith('/api/'):
         return None
     if any(path.startswith(p) for p in _MAINT_BYPASS_PATHS):
         return None
     # Si hay token SU válido, dejamos pasar (TIC siempre puede operar)
+    # El personal TIC con token SU debe poder operar siempre, incluso en mantenimiento
     if _su_token_valido(request):
         return None
     # Consultamos la bandera
@@ -1631,6 +2238,14 @@ def _check_maintenance_mode():
 # Cabeceras de seguridad en todas las respuestas HTTP
 @app.after_request
 def _security_headers(response):
+    """Agrega cabeceras de seguridad HTTP a todas las respuestas.
+
+    Args:
+        response (flask.Response): Respuesta a modificar.
+
+    Returns:
+        flask.Response: La misma respuesta con X-Frame-Options, CSP, nosniff, etc.
+    """
     response.headers['X-Frame-Options']        = 'SAMEORIGIN'
     response.headers['X-Content-Type-Options'] = 'nosniff'
     response.headers['X-XSS-Protection']       = '1; mode=block'
@@ -1651,6 +2266,14 @@ def _security_headers(response):
 # Errores no manejados → log al sistema
 @app.errorhandler(500)
 def _handle_500(e):
+    """Manejador global de errores 500: registra en system_log y responde JSON.
+
+    Args:
+        e (Exception): Excepción no controlada.
+
+    Returns:
+        JSON con error y detalle, código 500.
+    """
     _log_system('ERROR', str(e), _traceback.format_exc())
     return jsonify({'error': 'Error interno', 'detalle': str(e)}), 500
 
@@ -1725,12 +2348,29 @@ _PALABRAS_MATERIA = {
 
 
 def _sin_acentos(txt: str) -> str:
+    """Quita los acentos de un texto.
+
+    Args:
+        txt (str): Texto original.
+
+    Returns:
+        str: Texto sin marcas diacríticas.
+    """
     n = unicodedata.normalize('NFD', txt)
     return ''.join(c for c in n if unicodedata.category(c) != 'Mn')
 
 
 def _normalizar_dia(raw: str) -> str:
-    """Acepta L U N E S, Lun, LUNES, Lunes, Mar, etc."""
+    """Normaliza el día de la semana de una celda del Word.
+
+    Acepta variantes como L U N E S, Lun, LUNES o Lunes.
+
+    Args:
+        raw (str): Texto crudo de la celda.
+
+    Returns:
+        str: Nombre canónico del día (por ejemplo 'Miércoles') o cadena vacía si no se reconoce.
+    """
     compacto = re.sub(r'\n', ' ', raw).strip()
     # Unir letras sueltas separadas por espacio: "L U N E S" → "LUNES"
     compacto = re.sub(r'(?<=[A-ZÁÉÍÓÚa-záéíóú]) (?=[A-ZÁÉÍÓÚa-záéíóú])', '', compacto)
@@ -1742,16 +2382,35 @@ def _normalizar_dia(raw: str) -> str:
 
 
 def _normalizar_hora(h: str) -> str:
-    """'0720' → '07:20'. Corrige typos MM>=60 → '00'."""
+    """Convierte una hora militar en formato HH:MM.
+
+    Corrige errores de tipeo donde los minutos son 60 o más, reemplazándolos por 00.
+
+    Args:
+        h (str): Hora como '0720' o '720'.
+
+    Returns:
+        str: Hora con formato 'HH:MM'.
+    """
     h = h.strip().zfill(4)
     hh, mm = h[:2], h[2:]
+    # Hay typos en los documentos (por ejemplo 0880); minutos no válidos se llevan a 00
     if int(mm) >= 60:
         mm = '00'
     return f"{hh}:{mm}"
 
 
 def _limpiar_nombre(raw: str) -> str:
-    """Quita grado militar, (ORDEN CERRADO), paréntesis sueltos y basura."""
+    """Limpia el nombre de un docente extraído del Word.
+
+    Quita grado militar, marcas como ORDEN CERRADO, paréntesis y signos sueltos.
+
+    Args:
+        raw (str): Texto crudo con el docente.
+
+    Returns:
+        str: Nombre en mayúsculas con formato 'APELLIDO, NOMBRE', o cadena vacía si es 'profesor a designar'.
+    """
     s = raw.replace('\xa0', ' ').strip()
     if _DESIGNAR_RE.search(s):
         return ''
@@ -1781,6 +2440,16 @@ _FRAGMENTOS_ASIG = frozenset({
 
 
 def _es_ruido(txt: str) -> bool:
+    """Determina si un texto es ruido y no un nombre de docente o asignatura válido.
+
+    Considera ruido: textos vacíos o muy cortos, solo números o siglas de turno, y fragmentos sueltos de materias.
+
+    Args:
+        txt (str): Texto a evaluar.
+
+    Returns:
+        bool: True si es ruido.
+    """
     if not txt or len(txt) < 2:
         return True
     letras = re.sub(r'[^A-ZÁÉÍÓÚa-záéíóú]', '', txt)
@@ -1800,13 +2469,15 @@ def _es_ruido(txt: str) -> bool:
 # ── PARSEO DE HEADER DE COLUMNA DE AULA ─────────────────────────────────────
 
 def _parse_header_aula(txt: str) -> dict:
-    """
-    Extrae de '3º TUSPyC "17"' o '3º TUSPCIC  "22"':
-      numero      → '17'
-      anio        → '3'
-      orientacion → 'TUSPyC'
-      idioma      → '' | 'FRANCÉS' | 'INGLES'
-    Soporta comillas tipográficas de Word y espacios no-breakables (\xa0).
+    """Extrae número, año, orientación e idioma del encabezado de una columna de aula.
+
+    Soporta comillas tipográficas de Word y espacios no separables.
+
+    Args:
+        txt (str): Encabezado, por ejemplo '3º TUSPyC "17"'.
+
+    Returns:
+        dict: Claves numero (str o None), anio (str, por defecto '3'), orientacion (str) e idioma (str).
     """
     txt = txt.replace('\xa0', ' ').strip()
 
@@ -1848,7 +2519,14 @@ def _parse_header_aula(txt: str) -> dict:
 # ── HELPERS DE PARSEO DE CELDA ───────────────────────────────────────────────
 
 def _dividir_por_slash(texto: str) -> list:
-    """Divide 'MATE1 (1°C) / MATE2 (2°C)' respetando paréntesis."""
+    """Divide un texto por '/' ignorando las barras dentro de paréntesis.
+
+    Args:
+        texto (str): Texto como 'MATE1 (1°C) / MATE2 (2°C)'.
+
+    Returns:
+        list[str]: Tramos no vacíos; si no hay ninguno, una lista con el texto original.
+    """
     partes, actual, nivel = [], [], 0
     for c in texto:
         if c == '(':
@@ -1870,15 +2548,15 @@ def _dividir_por_slash(texto: str) -> list:
 
 
 def _doc_desde_linea(linea: str):
-    """
-    Dada una línea que contiene asignatura + posible docente,
-    devuelve (asignatura_limpia, docente_limpio).
-    Estrategias (en orden):
-      1. "profesor a designar" → docente vacío
-      2. Paréntesis al final: 'MATERIA (DOCENTE)' si el contenido no es cuatrimestre
-      3. Dos o más espacios: 'MATERIA   DOCENTE'
-      4. Después del último marcador de cuatrimestre: 'MATERIA (1°C) DOCENTE'
-      5. Vocabulario: último token que no es palabra de materia
+    """Separa una línea en asignatura y docente.
+
+    Aplica cinco estrategias en orden: 'profesor a designar', paréntesis final, doble espacio, texto posterior al marcador de cuatrimestre y vocabulario de materias.
+
+    Args:
+        linea (str): Línea con asignatura y posible docente.
+
+    Returns:
+        tuple[str, str]: (asignatura limpia, docente limpio); el docente puede ser cadena vacía.
     """
     linea = linea.replace('\xa0', ' ').strip()
     linea = _TURNO_NOTA.sub('', linea).strip()
@@ -1940,17 +2618,15 @@ def _doc_desde_linea(linea: str):
 # ── PARSEO DE CELDA DE HORARIO ───────────────────────────────────────────────
 
 def _parse_celda(celda) -> list:
-    """
-    Recibe el objeto celda de python-docx (no el texto plano).
-    Devuelve lista de {'asig': str, 'doc_raw': str}.
+    """Parsea una celda de horario del Word en pares asignatura/docente.
 
-    ESTRATEGIA:
-      A) ≥2 párrafos, último párrafo parece docente → primeros=asig, último=docente
-         (incluye: limpiar leading '/' en párrafos intermedios, herencia de docente
-          entre tramos cuando hay slash interno en párrafos de asig)
-      B) 1 párrafo (o fallback) → normalizar \xa0, dividir por slash respetando
-         paréntesis, aplicar _doc_desde_linea a cada tramo, heredar último docente
-         conocido a tramos sin docente.
+    Caso A: con 2 o más párrafos y último párrafo con aspecto de docente, los anteriores son asignaturas. Caso B: línea única o fallback, dividiendo por barra y heredando el último docente conocido.
+
+    Args:
+        celda: Celda de python-docx (no el texto plano).
+
+    Returns:
+        list[dict]: Elementos con claves asig y doc_raw.
     """
     # Normalizar \xa0 en todos los párrafos
     parrafos = []
@@ -2024,6 +2700,15 @@ def _parse_celda(celda) -> list:
 # ── CANONICALIZACIÓN DE NOMBRES ──────────────────────────────────────────────
 
 def _similitud(a: str, b: str) -> float:
+    """Calcula la similitud entre dos textos ignorando acentos y mayúsculas.
+
+    Args:
+        a (str): Primer texto.
+        b (str): Segundo texto.
+
+    Returns:
+        float: Ratio de SequenceMatcher entre 0 y 1.
+    """
     return SequenceMatcher(
         None, _sin_acentos(a).lower(), _sin_acentos(b).lower()
     ).ratio()
@@ -2051,7 +2736,14 @@ _NOMBRES_PROPIOS = {
 
 
 def _tokens_apellido(nombre: str) -> frozenset:
-    """Tokens significativos que probablemente sean apellido (no nombre de pila)."""
+    """Obtiene los tokens que probablemente son apellidos.
+
+    Args:
+        nombre (str): Nombre completo.
+
+    Returns:
+        frozenset: Tokens de más de 3 letras que no son nombres de pila comunes; si no queda ninguno, todos los tokens.
+    """
     s = _sin_acentos(nombre).upper()
     s = re.sub(r'[^A-Z\s]', ' ', s)
     toks = {t for t in s.split() if len(t) > 3}
@@ -2060,17 +2752,29 @@ def _tokens_apellido(nombre: str) -> frozenset:
 
 
 def _pila_tokens(nombre: str) -> frozenset:
-    """Tokens que probablemente son nombres de pila (están en _NOMBRES_PROPIOS)."""
+    """Obtiene los tokens que probablemente son nombres de pila.
+
+    Args:
+        nombre (str): Nombre completo.
+
+    Returns:
+        frozenset: Tokens de más de 3 letras presentes en el conjunto de nombres propios conocidos.
+    """
     s = _sin_acentos(nombre).upper()
     s = re.sub(r'[^A-Z\s]', ' ', s)
     return frozenset({t for t in s.split() if len(t) > 3} & _NOMBRES_PROPIOS)
 
 
 def _canonicalizar_nombres(pool: list) -> dict:
-    """
-    Agrupa variantes del mismo docente usando intersección de tokens de apellido.
-    Retorna {variante_raw → nombre_canónico_limpio}.
-    El canónico es el de mayor puntaje: con coma > más largo > más completo.
+    """Agrupa variantes del mismo docente y elige un nombre canónico.
+
+    Usa intersección de apellidos, compatibilidad de nombres de pila y similitud de texto. El canónico prefiere el que tiene coma y luego el más largo.
+
+    Args:
+        pool (list[str]): Nombres crudos de docentes.
+
+    Returns:
+        dict: Mapa {variante cruda: nombre canónico limpio}.
     """
     limpio_pool = []
     for n in pool:
@@ -2088,6 +2792,7 @@ def _canonicalizar_nombres(pool: list) -> dict:
             rep_toks = _tokens_apellido(rep_lim)
             rep_pila = _pila_tokens(rep_lim)
             # Sin apellidos en común → personas distintas
+            # Los apellidos en común son condición necesaria para agrupar; evita fusionar docentes distintos
             if not (toks & rep_toks):
                 continue
             # Ambos tienen nombres de pila identificables y no coinciden → personas distintas
@@ -2104,6 +2809,14 @@ def _canonicalizar_nombres(pool: list) -> dict:
     canon_map = {}
     for grupo in grupos:
         def _puntaje(x):
+            """Puntaje de un candidato a nombre canónico.
+
+            Args:
+                x (tuple): Par (nombre original, nombre limpio).
+
+            Returns:
+                int: Puntaje; la coma pesa más que la longitud.
+            """
             s = x[1]
             # Preferir: con coma > más largo > no solo apellido
             return (1 if ',' in s else 0) * 10000 + len(s)
@@ -2117,20 +2830,16 @@ def _canonicalizar_nombres(pool: list) -> dict:
 # ── FUNCIÓN PRINCIPAL DE PARSEO ──────────────────────────────────────────────
 
 def parse_word_schedule(ruta_docx, turno_default: str = 'TT'):
-    """
-    Parsea un archivo Word de horarios GNA.
+    """Parsea un archivo Word de horarios GNA en bloques de clase.
 
-    Lee los objetos celda reales (no .text) para usar párrafos y runs,
-    extrae el número + orientación de cada aula desde el encabezado,
-    normaliza días con letras sueltas (L U N E S → Lunes) y horas militares
-    (0720-0820 → 07:20-08:20), corrige typos (0880 → 08:00), y
-    canonicaliza variantes del mismo docente.
+    Lee las celdas reales, extrae aula y orientación del encabezado, normaliza días y horas, y canonicaliza los nombres de docentes.
+
+    Args:
+        ruta_docx (str): Ruta o archivo del .docx.
+        turno_default (str): Turno asignado a todos los bloques (por defecto 'TT').
 
     Returns:
-        bloques  (list[dict]):  [{aula, turno, anio, orientacion, idioma,
-                                  dia, hora, asig, doc_raw, doc_canon}]
-        mapa     (dict):        {variante → canónico}
-        errores  (list[str]):   advertencias
+        tuple: (bloques, mapa, errores, diag). bloques es una lista de dicts con aula, turno, anio, orientacion, idioma, dia, hora, asig, doc_raw y doc_canon; mapa es {variante: canónico}; errores es una lista de advertencias; diag es un dict de diagnóstico por tabla. Sin python-docx devuelve ([], {}, [mensaje], {}).
     """
     if not DOCX_OK or DocxDocument is None:
         return [], {}, ['python-docx no está instalado.'], {}
@@ -2249,10 +2958,13 @@ def parse_word_schedule(ruta_docx, turno_default: str = 'TT'):
 
 
 def _bloques_a_config_json(bloques: list) -> dict:
-    """
-    Convierte lista de bloques a estructura:
-    { "aula|turno" → [{"dia","hora","asig","doc","anio","orientacion","idioma"}] }
-    También retorna un dict de metadatos de aula.
+    """Convierte los bloques parseados en la configuración de cronograma por aula y turno.
+
+    Args:
+        bloques (list[dict]): Bloques devueltos por parse_word_schedule.
+
+    Returns:
+        dict: {'aula|turno': [{dia, hora, asig, doc, anio, orientacion, idioma}]}.
     """
     config = {}
     for b in bloques:
@@ -2277,12 +2989,22 @@ def _bloques_a_config_json(bloques: list) -> dict:
 
 @app.route('/')
 def index():
+    """Sirve la página principal (SPA).
+
+    Returns:
+        HTML renderizado de index.html.
+    """
     return render_template('index.html')
 
 
 # ── PWA: el service worker debe servirse desde la raíz para tener scope sobre toda la app
 @app.route('/service-worker.js')
 def service_worker():
+    """Sirve el service worker de la PWA desde la raíz para que tenga alcance sobre toda la app.
+
+    Returns:
+        Archivo JavaScript con cabeceras sin caché y Service-Worker-Allowed.
+    """
     resp = make_response(send_from_directory(
         os.path.join(app.root_path, 'static'),
         'service-worker.js',
@@ -2297,12 +3019,21 @@ def service_worker():
 # ── MODO KIOSKO — Pantalla pública para TV del hall (sin login) ──
 @app.route('/kiosko')
 def kiosko():
+    """Sirve la pantalla pública del kiosko para la TV del hall.
+
+    Returns:
+        HTML renderizado de kiosko.html.
+    """
     return render_template('kiosko.html')
 
 
 @app.route('/api/kiosko/data', methods=['GET'])
 def kiosko_data():
-    """Datos en vivo para la pantalla del hall. Solo lectura, sin auth."""
+    """Datos en vivo para la pantalla del kiosko. Solo lectura y sin autenticación.
+
+    Returns:
+        JSON con hoy, ahora, dia, kpis (firmas_hoy, aulas_op, clases_en_curso), clases_ahora (máx. 12) y clases_proximas (máx. 6, comienzan dentro de 30 minutos).
+    """
     hoy = date.today()
     ahora = datetime.now()
     dia_hoy = ['Lunes','Martes','Miércoles','Jueves','Viernes',
@@ -2375,6 +3106,11 @@ def kiosko_data():
 
 @app.route('/manifest.json')
 def manifest_json():
+    """Sirve el manifest de la PWA.
+
+    Returns:
+        Archivo manifest.json con mimetype application/manifest+json.
+    """
     return send_from_directory(os.path.join(app.root_path, 'static'),
                                'manifest.json',
                                mimetype='application/manifest+json')
@@ -2382,6 +3118,11 @@ def manifest_json():
 
 @app.route('/api/init_db', methods=['POST'])
 def api_init_db():
+    """Verifica o crea las tablas de la base de datos ejecutando init_db.
+
+    Returns:
+        JSON con msj si todo sale bien; 500 con error si falla.
+    """
     try:
         init_db()
         return jsonify({'msj': 'Tablas verificadas/creadas correctamente.'})
@@ -2392,6 +3133,13 @@ def api_init_db():
 @app.route('/api/diagnostico', methods=['GET'])
 def diagnostico():
     # Tablas operativas (siempre deben existir)
+    """Diagnóstico del sistema: estado de tablas, sesiones activas, rate limiter y conexión.
+
+    Las tablas opcionales de archivo no se consideran error si aún no existen.
+
+    Returns:
+        JSON con estado, version, servidor, sesiones, tablas y conexion (sin contraseña); 500 con estado 'error' si falla.
+    """
     tablas = [
         # Datos académicos
         'aula_catalogo', 'cronograma_maestro', 'cronograma_versiones', 'aspirantes', 'tipos_novedad', 'docentes',
@@ -2473,7 +3221,11 @@ def diagnostico():
 
 @app.route('/api/db_connection', methods=['GET'])
 def db_connection_actual():
-    """Devuelve la configuración actual (sin password). Requiere SU."""
+    """Devuelve la configuración actual de la base de datos, sin contraseña. Requiere token SU.
+
+    Returns:
+        JSON con host, port, dbname, user y es_personalizada.
+    """
     err = _exigir_su(request)
     if err: return err
     cfg = _load_db_config()
@@ -2488,7 +3240,14 @@ def db_connection_actual():
 
 @app.route('/api/db_connection/test', methods=['POST'])
 def db_connection_test():
-    """Prueba una conexión sin guardarla. Requiere SU."""
+    """Prueba una conexión a PostgreSQL sin guardarla. Requiere token SU.
+
+    Args:
+        host, port, dbname, user, password: Campos JSON del body.
+
+    Returns:
+        JSON con ok y version si conecta; 400 con ok=False y error si falla.
+    """
     err = _exigir_su(request)
     if err: return err
     d = request.json or {}
@@ -2516,8 +3275,16 @@ def db_connection_test():
 
 @app.route('/api/db_connection', methods=['POST'])
 def db_connection_guardar():
-    """Prueba la conexión y, si funciona, la persiste y crea las tablas. Requiere SU.
-    Implementa rollback: si init_db falla en la nueva BD, restaura el archivo previo."""
+    """Prueba, guarda la conexión a la base de datos e inicializa las tablas. Requiere token SU.
+
+    Si init_db falla en la nueva BD, restaura la configuración anterior.
+
+    Args:
+        host, port, dbname, user, password: Campos JSON del body; host, dbname y user son obligatorios.
+
+    Returns:
+        JSON con msj, host, dbname y user; 400 si faltan datos o no conecta; 500 si falla guardar o init_db.
+    """
     err = _exigir_su(request)
     if err: return err
     d = request.json or {}
@@ -2558,6 +3325,7 @@ def db_connection_guardar():
         return jsonify({'error': f'Falló guardar config: {e}'}), 500
 
     # 4) Inicializar tablas en la nueva BD — si falla, ROLLBACK
+    # Si la inicialización falla se revierte el archivo de configuración para no dejar al sistema apuntando a una BD inutilizable
     try:
         init_db()
     except Exception as e:
@@ -2583,7 +3351,11 @@ def db_connection_guardar():
 
 @app.route('/api/db_connection/reset', methods=['POST'])
 def db_connection_reset():
-    """Elimina la config personalizada y vuelve al .env / default. Requiere SU."""
+    """Elimina la configuración personalizada de BD y vuelve a .env o valores por defecto. Requiere token SU.
+
+    Returns:
+        JSON con msj indicando la conexión restaurada; 500 ante error.
+    """
     err = _exigir_su(request)
     if err: return err
     try:
@@ -2602,6 +3374,15 @@ def db_connection_reset():
 # ─── CATÁLOGO ACADÉMICO Y PINes ────────────────────────────────────────────
 
 def _obtener_info_aula(aula: str, turno: str) -> dict:
+    """Obtiene la información del catálogo de un aula.
+
+    Args:
+        aula (str): Número o código de aula.
+        turno (str): Turno (TM o TT).
+
+    Returns:
+        dict: aula, turno, nombre, anio, especialidad, curso, aliases y fuente; valores vacíos si no existe en el catálogo.
+    """
     conn = get_db()
     try:
         with conn.cursor() as cur:
@@ -2627,6 +3408,15 @@ def _obtener_info_aula(aula: str, turno: str) -> dict:
 
 @app.route('/api/aulas_catalogo', methods=['GET'])
 def aulas_catalogo():
+    """Lista el catálogo de aulas con filtros opcionales.
+
+    Args:
+        turno (str): Query string; TM o TT.
+        q (str): Query string; búsqueda parcial en aula, nombre, especialidad o curso.
+
+    Returns:
+        JSON con lista de aulas (aula, turno, nombre, anio, especialidad, curso, aliases, fuente).
+    """
     turno = request.args.get('turno', '').strip().upper()
     query = request.args.get('q', '').strip()
     condiciones = []
@@ -2661,6 +3451,16 @@ def aulas_catalogo():
 
 @app.route('/api/aulas_catalogo', methods=['PUT'])
 def actualizar_aula_catalogo():
+    """Edita un aula del catálogo y, si cambia aula o turno, actualiza el cronograma. Requiere token SU.
+
+    Args:
+        aula_original, turno_original (str): Campos JSON; identifican el aula a editar.
+        aula, turno, nombre (str): Campos JSON obligatorios con los nuevos valores; turno TM o TT.
+        anio, especialidad, curso (str): Campos JSON opcionales.
+
+    Returns:
+        JSON con los datos actualizados; 400 si faltan datos o el turno es inválido, 404 si no existe, 409 si el destino ya existe, 500 ante error.
+    """
     err = _exigir_su(request)
     if err:
         return err
@@ -2693,6 +3493,7 @@ def actualizar_aula_catalogo():
         if not row:
             conn.rollback()
             return jsonify({'error': 'El aula original no existe'}), 404
+        # Al renombrar el aula se registra la baja del identificador viejo para que el sembrado del catálogo no lo recree
         if (aula, turno) != (original_aula, original_turno):
             with conn.cursor() as cur:
                 cur.execute(
@@ -2730,6 +3531,17 @@ def actualizar_aula_catalogo():
 
 @app.route('/api/aulas_catalogo/<aula>/<turno>', methods=['DELETE'])
 def eliminar_aula_catalogo(aula, turno):
+    """Elimina un aula del catálogo y su cronograma vigente. Requiere token SU.
+
+    Conserva padrón, minutas, firmas y versiones históricas. Registra la baja para que no se vuelva a sembrar.
+
+    Args:
+        aula (str): Parámetro de URL.
+        turno (str): Parámetro de URL; TM o TT.
+
+    Returns:
+        JSON con msj, aula, turno, cronogramas_eliminados y datos_conservados; 400 si los datos son inválidos, 404 si no existe, 500 ante error.
+    """
     err = _exigir_su(request)
     if err:
         return err
@@ -2791,6 +3603,15 @@ def eliminar_aula_catalogo(aula, turno):
 
 @app.route('/api/aula_info/<aula>/<turno>', methods=['GET'])
 def aula_info(aula, turno):
+    """Devuelve la información de catálogo de un aula.
+
+    Args:
+        aula (str): Parámetro de URL.
+        turno (str): Parámetro de URL.
+
+    Returns:
+        JSON con los datos del aula (ver _obtener_info_aula).
+    """
     return jsonify(_obtener_info_aula(aula, turno))
 
 
@@ -2798,6 +3619,11 @@ def aula_info(aula, turno):
 
 @app.route('/api/pines_operativos', methods=['GET'])
 def pines_operativos():
+    """Lista las aulas con cronograma y su PIN diario operativo.
+
+    Returns:
+        JSON con lista de objetos aula, turno, grado, nombre, anio, especialidad, curso y pin.
+    """
     conn = get_db()
     try:
         with conn.cursor() as cur:
@@ -2829,6 +3655,14 @@ def pines_operativos():
 
 @app.route('/api/validar_pin', methods=['POST'])
 def validar_pin():
+    """Valida un PIN diario de aula.
+
+    Args:
+        pin (str): Campo JSON del body.
+
+    Returns:
+        JSON con status 'ok', aula, turno y aula_info; 400 si falta el PIN, 403 si no corresponde a ninguna aula activa hoy.
+    """
     data     = request.json or {}
     pin_user = str(data.get('pin', '')).strip()
     if not pin_user:
@@ -2843,8 +3677,18 @@ def validar_pin():
 
 @app.route('/api/bedel/vincular_telegram', methods=['POST'])
 def bedel_vincular_telegram():
-    """El Bedel ingresa el código de 6 dígitos que le dio el bot y queda vinculado.
-    Requiere que ya esté autenticado por PIN (aula+turno vienen del front)."""
+    """Vincula el Telegram de un bedel mediante el código de 6 dígitos entregado por el bot.
+
+    El aula y turno vienen del front, ya autenticado por PIN. Requiere Telegram para Bedelía habilitado por TIC.
+
+    Args:
+        codigo (str): Campo JSON del body; 6 dígitos.
+        aula (str): Campo JSON del body.
+        turno (str): Campo JSON del body.
+
+    Returns:
+        JSON con ok y msj; 400 si los datos son inválidos o el código falla, 403 si la integración está desactivada.
+    """
     if not _telegram_bedel_habilitado():
         return jsonify({'ok': False, 'error': 'La integración de Telegram para Bedelía está desactivada por TIC.'}), 403
     d = request.json or {}
@@ -2882,8 +3726,16 @@ def bedel_vincular_telegram():
 
 @app.route('/api/bedel/login_magic', methods=['POST'])
 def bedel_login_magic():
-    """Consume un token de login mágico generado vía /link_pc en el bot.
-    Devuelve aula+turno como si hubiera ingresado por PIN, si TIC habilitó Telegram para Bedelía."""
+    """Consume un token de login mágico generado con /link_pc en el bot.
+
+    Devuelve aula y turno como si se hubiera ingresado con PIN. Requiere Telegram para Bedelía habilitado.
+
+    Args:
+        token (str): Campo JSON del body.
+
+    Returns:
+        JSON con status 'ok', aula, turno y aula_info; 400 si falta el token, 403 si está desactivado, es inválido, usado o expirado, 500 ante error.
+    """
     if not _telegram_bedel_habilitado():
         return jsonify({
             'error': 'Telegram para Bedelía está desactivado por TIC. Ingrese con el PIN diario.'
@@ -2907,6 +3759,7 @@ def bedel_login_magic():
                 return jsonify({'error': 'Token ya utilizado'}), 403
             if exp < datetime.now():
                 return jsonify({'error': 'Token expirado'}), 403
+            # El token se marca como usado para que el enlace mágico sea de un solo uso
             cur.execute("UPDATE bedel_link_tokens SET usado=TRUE WHERE token=%s", (tok,))
         conn.commit()
         conn.close()
@@ -2919,7 +3772,11 @@ def bedel_login_magic():
 
 @app.route('/api/su/bedeles_telegram', methods=['GET'])
 def su_bedeles_telegram_lista():
-    """Lista de bedeles vinculados con Telegram (para TIC)."""
+    """Lista los bedeles vinculados con Telegram. Requiere token SU.
+
+    Returns:
+        JSON con lista de aula, turno, telegram_username, nombre_telegram, vinculado_en, ultimo_acceso y activo; 403 si el token SU es inválido.
+    """
     if not _su_token_valido(request):
         return jsonify({'error': 'Token SU inválido'}), 403
     try:
@@ -2938,11 +3795,21 @@ def su_bedeles_telegram_lista():
 
 
 def _telegram_bedel_habilitado() -> bool:
+    """Indica si TIC habilitó el acceso de Bedelía mediante Telegram.
+
+    Returns:
+        bool: True si el parámetro telegram_bedel_login_activo vale '1'.
+    """
     return _cargar_params().get('telegram_bedel_login_activo', {}).get('valor') == '1'
 
 
 @app.route('/api/bedel/telegram/status', methods=['GET'])
 def bedel_telegram_status():
+    """Informa si el login de bedeles por Telegram está activo. Respuesta sin caché.
+
+    Returns:
+        JSON con activo (bool).
+    """
     response = jsonify({'activo': _telegram_bedel_habilitado()})
     response.headers['Cache-Control'] = 'no-store'
     return response
@@ -2950,6 +3817,14 @@ def bedel_telegram_status():
 
 @app.route('/api/su/telegram/acceso_bedelia', methods=['GET', 'POST'])
 def su_telegram_acceso_bedelia():
+    """Consulta (GET) o configura (POST) el acceso de Bedelía por Telegram. Requiere token SU.
+
+    Args:
+        activo (bool): Campo JSON del body (solo POST); debe ser booleano.
+
+    Returns:
+        GET: JSON con activo y bedeles_vinculados. POST: JSON con activo y msj. 400 si activo no es booleano, 403 si el token SU es inválido, 500 ante error.
+    """
     if not _su_token_valido(request):
         return jsonify({'error': 'Token SU inválido'}), 403
     if request.method == 'GET':
@@ -3005,6 +3880,15 @@ def su_telegram_acceso_bedelia():
 
 @app.route('/api/aspirantes', methods=['GET'])
 def get_aspirantes():
+    """Lista el padrón de aspirantes de un aula y turno.
+
+    Args:
+        aula (str): Query string.
+        turno (str): Query string.
+
+    Returns:
+        JSON con lista de objetos grado y nombre ordenados por nombre.
+    """
     aula  = request.args.get('aula', '').strip().upper()
     turno = request.args.get('turno', '').strip().upper()
     conn  = get_db()
@@ -3023,7 +3907,16 @@ def get_aspirantes():
 
 @app.route('/api/aspirantes', methods=['POST'])
 def guardar_aspirantes_manual():
-    """Reemplaza el padrón completo de un aula+turno con la lista provista."""
+    """Reemplaza el padrón completo de un aula y turno con la lista provista.
+
+    Args:
+        aula (str): Campo JSON del body.
+        turno (str): Campo JSON del body.
+        aspirantes (list[dict]): Campo JSON; cada elemento con nombre y grado. Se omiten los nombres vacíos.
+
+    Returns:
+        JSON con msj indicando la cantidad guardada; 400 si faltan aula o turno, 500 ante error.
+    """
     d          = request.json or {}
     aula       = d.get('aula',  '').strip().upper()
     turno      = d.get('turno', '').strip().upper()
@@ -3067,6 +3960,11 @@ def guardar_aspirantes_manual():
 
 @app.route('/api/minutas', methods=['GET'])
 def get_minutas():
+    """Lista todas las minutas con sus ausentes, cronograma y coberturas docentes.
+
+    Returns:
+        JSON con lista de minutas (campos de la tabla más schedule, ausentes y coberturas), ordenadas por fecha descendente; 500 ante error.
+    """
     conn = None
     try:
         conn = get_db()
@@ -3126,6 +4024,16 @@ def get_minutas():
 
 @app.route('/api/monitor/aulas-dia', methods=['GET'])
 def monitor_aulas_dia():
+    """Monitor de aulas del día: estado de clases, minutas, firmas y coberturas. Requiere token admin o SU.
+
+    Args:
+        fecha (str): Query string opcional; AAAA-MM-DD (por defecto hoy).
+        aula (str): Query string opcional; requiere turno para ver el detalle.
+        turno (str): Query string opcional; TM o TT.
+
+    Returns:
+        JSON con fecha, dia, aulas (clases con estado firmado, ausente, presente o pendiente), cierres y detalle. 400 si los parámetros son inválidos, 403 si no está autorizado, 500 ante error.
+    """
     if not _admin_token_valido(request) and not _su_token_valido(request):
         return jsonify({'error': 'No autorizado'}), 403
     fecha_texto = (request.args.get('fecha') or date.today().isoformat()).strip()
@@ -3192,6 +4100,14 @@ def monitor_aulas_dia():
                 aspirantes = []
 
         def json_lista(valor):
+            """Normaliza un valor JSON a lista.
+
+            Args:
+                valor: Lista o string JSON.
+
+            Returns:
+                list: La lista, o lista vacía si no es válida.
+            """
             if isinstance(valor, str):
                 try:
                     valor = json.loads(valor)
@@ -3290,6 +4206,18 @@ def monitor_aulas_dia():
 
 @app.route('/api/minutas', methods=['POST'])
 def guardar_minuta():
+    """Guarda o actualiza la minuta de un aula, fecha y turno.
+
+    Calcula y audita los cambios de justificación de ausentes y notifica por Telegram en segundo plano.
+
+    Args:
+        aula, fecha, turno, fe, presentes, cant_ausentes: Campos JSON obligatorios; fecha AAAA-MM-DD y turno TM o TT.
+        bedel, sub_bedel, novedades (str): Campos JSON opcionales.
+        schedule (list), ausentes (list[dict]): Campos JSON opcionales.
+
+    Returns:
+        JSON con msj 'Guardado exitoso'; 400 si faltan campos o son inválidos, 409 si el calendario indica que no hay actividad, 500 ante error.
+    """
     d    = request.json or {}
     reqs = ['aula', 'fecha', 'turno', 'fe', 'presentes', 'cant_ausentes']
     for campo in reqs:
@@ -3346,6 +4274,7 @@ def guardar_minuta():
                 if isinstance(item, dict) and item.get('nombre')
             }
 
+            # Se conserva la clasificación histórica de cada ausente para auditar solo los cambios reales de justificación
             cambios_justificacion = []
             for item in ausentes:
                 nombre_ausente = str(item.get('nombre') or '').strip()
@@ -3428,7 +4357,15 @@ def guardar_minuta():
 
 
 def _resolver_justificacion_ausencia(configuracion, anterior=None):
-    """Conserva la clasificación histórica o aplica la regla vigente de TIC."""
+    """Resuelve si una ausencia es justificada.
+
+    Args:
+        configuracion (tuple | None): Par (permite_justificacion, justificada_por_defecto) del tipo de novedad.
+        anterior (dict, optional): Ausente previo de la minuta.
+
+    Returns:
+        bool | None: Valor histórico si existe; si no, la regla vigente de TIC, o None si no se puede determinar.
+    """
     if isinstance(anterior, dict):
         return anterior.get('es_justificada')
     if configuracion is None:
@@ -3442,12 +4379,27 @@ def _resolver_justificacion_ausencia(configuracion, anterior=None):
 # ─── HORAS CÁTEDRA DE ASPIRANTES ───────────────────────────────────────────
 
 def _duracion_horas_catedra(hora: str) -> float:
-    """Convierte un rango HHMM-HHMM en horas, sin aceptar duraciones inválidas."""
+    """Convierte un rango horario HHMM-HHMM en horas.
+
+    Args:
+        hora (str): Rango como '0720-0820'.
+
+    Returns:
+        float: Duración en horas; 0.0 si el formato o la duración son inválidos.
+    """
     partes = re.split(r'\s*[-–]\s*', str(hora or '').strip())
     if len(partes) != 2:
         return 0.0
 
     def minutos(valor):
+        """Convierte una hora HHMM en minutos desde medianoche.
+
+        Args:
+            valor (str): Hora de 3 o 4 dígitos.
+
+        Returns:
+            int | None: Minutos, o None si es inválida.
+        """
         digitos = re.sub(r'\D', '', valor)
         if len(digitos) not in (3, 4):
             return None
@@ -3456,6 +4408,7 @@ def _duracion_horas_catedra(hora: str) -> float:
         return hh * 60 + mm if 0 <= hh < 24 and 0 <= mm < 60 else None
 
     inicio, fin = minutos(partes[0]), minutos(partes[1])
+    # Se descartan rangos invertidos o nulos para que no generen horas negativas
     if inicio is None or fin is None or fin <= inicio:
         return 0.0
     return (fin - inicio) / 60.0
@@ -3463,7 +4416,21 @@ def _duracion_horas_catedra(hora: str) -> float:
 
 def _calcular_horas_catedra(desde, hasta, aula='', turno='', nombre='',
                             materia='') -> dict:
-    """Calcula horas por aspirante y materia desde minutas y padrón existentes."""
+    """Calcula horas cátedra por aspirante y materia a partir de minutas y padrón.
+
+    Omite fechas con día sin actividad confirmado y usa las ausencias de la minuta para clasificar horas justificadas, no justificadas o sin clasificar.
+
+    Args:
+        desde: Fecha inicial (AAAA-MM-DD).
+        hasta: Fecha final (AAAA-MM-DD).
+        aula: Filtro opcional de aula.
+        turno: Filtro opcional de turno (TM/TT).
+        nombre: Filtro opcional por nombre de aspirante (contiene).
+        materia: Filtro opcional por asignatura (contiene).
+
+    Returns:
+        dict con 'resumen' (totales y porcentajes) y 'detalle' (una fila por aspirante, aula, turno y materia).
+    """
     filtros = ['fecha BETWEEN %s AND %s']
     params = [desde, hasta]
     if aula:
@@ -3541,6 +4508,7 @@ def _calcular_horas_catedra(desde, hasta, aula='', turno='', nombre='',
                         if novedad:
                             item['horas_sin_clasificar'] += horas
 
+        # Las horas asistidas se obtienen por diferencia y se limitan a cero para que datos inconsistentes no den valores negativos
         for item in acumulado.values():
             item['horas_asistidas'] = max(
                 0.0,
@@ -3581,6 +4549,15 @@ def _calcular_horas_catedra(desde, hasta, aula='', turno='', nombre='',
 
 @app.route('/api/plana_mayor/horas_catedra', methods=['GET'])
 def horas_catedra():
+    """Devuelve el reporte de horas cátedra (Plana Mayor o Super Usuario).
+
+    Args:
+        Query string: desde (default 2000-01-01), hasta (default hoy), aula, turno, aspirante, materia.
+        Headers: token de administración o de super usuario.
+
+    Returns:
+        JSON con 'resumen' y 'detalle'; 403 sin autorización; 400 si las fechas son inválidas o desde > hasta.
+    """
     if not _admin_token_valido(request) and not _su_token_valido(request):
         return jsonify({'error': 'No autorizado'}), 403
     desde = request.args.get('desde', '2000-01-01')
@@ -3602,6 +4579,11 @@ def horas_catedra():
 
 @app.route('/api/tipos_novedad', methods=['GET'])
 def listar_tipos_novedad():
+    """Lista los tipos de novedad activos.
+
+    Returns:
+        JSON: lista de objetos con id, nombre, permite_justificacion y justificada_por_defecto, ordenada por nombre.
+    """
     conn = get_db()
     try:
         with conn.cursor() as cur:
@@ -3620,6 +4602,15 @@ def listar_tipos_novedad():
 
 @app.route('/api/tipos_novedad', methods=['POST'])
 def crear_tipo_novedad():
+    """Crea un tipo de novedad o reactiva uno desactivado con el mismo nombre (solo Super Usuario).
+
+    Args:
+        JSON del body: nombre (obligatorio, máx. 80, se pasa a mayúsculas), permite_justificacion (bool, default True), justificada_por_defecto (bool o null).
+        Headers: token de super usuario.
+
+    Returns:
+        JSON del tipo creado con 201; 400 si el nombre es inválido; 409 si ya existe activo; 500 ante error.
+    """
     err = _exigir_su(request)
     if err:
         return err
@@ -3632,6 +4623,7 @@ def crear_tipo_novedad():
     conn = get_db()
     try:
         with conn.cursor() as cur:
+            # FOR UPDATE serializa creaciones concurrentes del mismo nombre y permite reactivar un tipo desactivado sin duplicarlo
             cur.execute("""
                 SELECT id, activo
                 FROM tipos_novedad
@@ -3689,6 +4681,16 @@ def crear_tipo_novedad():
 
 @app.route('/api/tipos_novedad/<int:tipo_id>', methods=['PUT'])
 def actualizar_tipo_novedad(tipo_id):
+    """Actualiza parcialmente un tipo de novedad (solo Super Usuario).
+
+    Args:
+        tipo_id: ID del tipo (URL).
+        JSON del body: nombre, permite_justificacion, justificada_por_defecto, activo (todos opcionales, al menos uno).
+        Headers: token de super usuario.
+
+    Returns:
+        JSON con el tipo actualizado; 400 sin cambios o nombre inválido; 404 si no existe; 409 si el nombre está duplicado.
+    """
     err = _exigir_su(request)
     if err:
         return err
@@ -3740,6 +4742,15 @@ def actualizar_tipo_novedad(tipo_id):
 
 @app.route('/api/tipos_novedad/<int:tipo_id>', methods=['DELETE'])
 def eliminar_tipo_novedad(tipo_id):
+    """Desactiva (baja lógica) un tipo de novedad (solo Super Usuario).
+
+    Args:
+        tipo_id: ID del tipo (URL).
+        Headers: token de super usuario.
+
+    Returns:
+        JSON {'msj': ...}; 404 si no existe; 500 ante error.
+    """
     err = _exigir_su(request)
     if err:
         return err
@@ -3768,6 +4779,17 @@ def eliminar_tipo_novedad(tipo_id):
 
 @app.route('/api/calendario/no_actividad', methods=['GET', 'POST'])
 def calendario_no_actividad():
+    """Lista o crea días sin actividad del calendario.
+
+    GET (Plana Mayor o SU) devuelve todos los eventos con su estado y excepciones. POST (solo SU) valida el alcance (institución, turno o aula), verifica que el aula exista en el cronograma y evita duplicados activos.
+
+    Args:
+        JSON del body (POST): fecha, alcance, turno, aula, motivo.
+        Headers: token de administración o super usuario.
+
+    Returns:
+        GET: JSON con lista de eventos. POST: evento creado con 201; 400 datos inválidos; 409 duplicado; 403 sin autorización.
+    """
     if request.method == 'GET':
         if not _admin_token_valido(request) and not _su_token_valido(request):
             return jsonify({'error': 'No autorizado'}), 403
@@ -3852,6 +4874,14 @@ def calendario_no_actividad():
 
 @app.route('/api/calendario/estado', methods=['GET'])
 def estado_calendario_no_actividad():
+    """Consulta si un aula y turno no tienen actividad en una fecha según el calendario confirmado.
+
+    Args:
+        Query string: fecha (AAAA-MM-DD), aula, turno (TM/TT).
+
+    Returns:
+        JSON {'sin_actividad': bool, 'mensaje': str}; 400 si los parámetros son inválidos.
+    """
     fecha = (request.args.get('fecha') or '').strip()
     aula = (request.args.get('aula') or '').strip().upper()
     turno = (request.args.get('turno') or '').strip().upper()
@@ -3881,6 +4911,18 @@ def estado_calendario_no_actividad():
 
 @app.route('/api/calendario/no_actividad/<int:evento_id>', methods=['PUT', 'DELETE'])
 def editar_calendario_no_actividad(evento_id):
+    """Modifica o elimina un día sin actividad aún programado (solo Super Usuario).
+
+    Solo permite cambios mientras el estado sea 'programado'; uno confirmado debe reabrirse antes desde Plana Mayor.
+
+    Args:
+        evento_id: ID del evento (URL).
+        JSON del body (PUT): fecha, alcance, turno, aula, motivo.
+        Headers: token de super usuario.
+
+    Returns:
+        JSON con mensaje o el evento actualizado; 404 si no existe; 409 si no está programado o hay duplicado; 400 datos inválidos.
+    """
     err = _exigir_su(request)
     if err:
         return err
@@ -3953,6 +4995,15 @@ def editar_calendario_no_actividad(evento_id):
 
 @app.route('/api/calendario/no_actividad/<int:evento_id>/confirmar', methods=['POST'])
 def confirmar_calendario_no_actividad(evento_id):
+    """Confirma un día sin actividad programado (Plana Mayor o SU).
+
+    Args:
+        evento_id: ID del evento (URL).
+        Headers: token de administración o super usuario.
+
+    Returns:
+        JSON {'msj': ...}; 409 si no existe o ya estaba confirmado; 403 sin autorización. Registra auditoría.
+    """
     if not _admin_token_valido(request) and not _su_token_valido(request):
         return jsonify({'error': 'No autorizado'}), 403
     usuario = _usuario_sesion_actual(request)
@@ -3983,12 +5034,22 @@ def confirmar_calendario_no_actividad(evento_id):
 
 @app.route('/api/calendario/no_actividad/<int:evento_id>/reabrir', methods=['POST'])
 def reabrir_calendario_no_actividad(evento_id):
+    """Reabre un día sin actividad confirmado devolviéndolo a 'programado' (Plana Mayor o SU).
+
+    Args:
+        evento_id: ID del evento (URL).
+        Headers: token de administración o super usuario.
+
+    Returns:
+        JSON {'msj': ...}; 409 si no está confirmado o existe otra programación activa con igual alcance y fecha.
+    """
     if not _admin_token_valido(request) and not _su_token_valido(request):
         return jsonify({'error': 'No autorizado'}), 403
     usuario = _usuario_sesion_actual(request)
     conn = get_db()
     try:
         with conn.cursor() as cur:
+            # Se bloquea la fila confirmada para evitar reaperturas concurrentes que dejen dos programaciones activas
             cur.execute("""
                 SELECT fecha::text, alcance, turno, aula
                 FROM calendario_no_actividad WHERE id=%s AND estado='confirmado'
@@ -4031,6 +5092,16 @@ def reabrir_calendario_no_actividad(evento_id):
 
 @app.route('/api/calendario/no_actividad/<int:evento_id>/excepciones', methods=['POST'])
 def gestionar_excepcion_calendario(evento_id):
+    """Agrega o quita una excepción de aula/turno en un cierre confirmado por institución o turno.
+
+    Args:
+        evento_id: ID del cierre (URL).
+        JSON del body: aula, turno (TM/TT), motivo (obligatorio al agregar, máx. 200), accion ('agregar' o 'quitar').
+        Headers: token de administración o super usuario.
+
+    Returns:
+        JSON con 'msj' y la lista 'excepciones'; 400/404/409 según validación.
+    """
     if not _admin_token_valido(request) and not _su_token_valido(request):
         return jsonify({'error': 'No autorizado'}), 403
     d = request.json or {}
@@ -4066,6 +5137,7 @@ def gestionar_excepcion_calendario(evento_id):
             )
             if not cur.fetchone():
                 return jsonify({'error': 'El aula no existe en el cronograma del turno seleccionado.'}), 400
+            # Se reemplaza cualquier excepción previa del mismo aula y turno para que agregar sea idempotente y no se dupliquen entradas
             excepciones = row[3] or []
             if isinstance(excepciones, str):
                 excepciones = json.loads(excepciones or '[]')
@@ -4108,8 +5180,10 @@ def gestionar_excepcion_calendario(evento_id):
 
 @app.route('/api/docentes/lista_oficial', methods=['GET'])
 def lista_oficial_docentes():
-    """
-    Retorna todos los nombres canónicos de docentes en los cronogramas.
+    """Devuelve los nombres canónicos de docentes presentes en los cronogramas.
+
+    Returns:
+        JSON: lista de nombres canonicalizados y ordenados.
     """
     conn = get_db()
     try:
@@ -4144,7 +5218,11 @@ def lista_oficial_docentes():
 
 @app.route('/api/docentes/nombres-cronograma', methods=['GET'])
 def nombres_docentes_cronograma():
-    """Nombres tal como están cargados, para que el registro coincida con las aulas."""
+    """Lista los nombres de docentes del cronograma con su cantidad de bloques y aulas.
+
+    Returns:
+        JSON: lista de objetos con nombre, bloques y aulas ('AULA (TURNO)').
+    """
     conn = get_db()
     try:
         ubicaciones = {}
@@ -4182,12 +5260,24 @@ def nombres_docentes_cronograma():
 
 @app.route('/api/docentes', methods=['GET'])
 def listar_docentes_compatibilidad():
-    """Alias histórico para clientes que consultan el padrón de docentes."""
+    """Alias de compatibilidad de /api/docentes que delega en la lista oficial de docentes.
+
+    Returns:
+        La misma respuesta que lista_oficial_docentes.
+    """
     return lista_oficial_docentes()
 
 
 @app.route('/api/docente/registro', methods=['POST'])
 def docente_registro():
+    """Registra una cuenta docente.
+
+    Args:
+        JSON del body: nombre, dni, email, password (todos obligatorios), es_pgnp (bool opcional).
+
+    Returns:
+        JSON de confirmación; 400 si faltan campos o la contraseña es débil; 409 si email/DNI ya existen o el nombre coincide con un titular registrado.
+    """
     d        = request.json or {}
     # Normaliza defensivamente: evita guardar "  , APELLIDO, NOMBRE  " o variantes
     nombre   = _normalizar_nombre_docente(d.get('nombre', ''))
@@ -4208,6 +5298,7 @@ def docente_registro():
             )
             if cur.fetchone():
                 return jsonify({'error': 'El email o DNI ya están registrados'}), 409
+            # Evita que un titular cree una segunda cuenta comparando con una clave de nombre normalizada
             if not es_pgnp:
                 cur.execute("SELECT id, nombre FROM docentes WHERE es_pgnp=FALSE")
                 if any(
@@ -4262,6 +5353,15 @@ def docente_registro():
 
 @app.route('/api/docente/login', methods=['POST'])
 def docente_login():
+    """Inicia sesión de docente y emite un token de sesión.
+
+    Args:
+        JSON del body: email, password.
+
+    Returns:
+        JSON con token y datos del docente; 400 si faltan campos; 401 credenciales incorrectas; bloqueo por límite de intentos.
+    """
+    # Se limita la tasa de intentos antes de tocar la base para frenar ataques de fuerza bruta
     if not _rl_verificar():
         return _rl_respuesta_bloqueada()
     d        = request.json or {}
@@ -4298,6 +5398,14 @@ def docente_login():
 
 @app.route('/api/docente/logout', methods=['POST'])
 def docente_logout():
+    """Cierra la sesión del docente invalidando su token.
+
+    Args:
+        Headers: X-Docente-Token.
+
+    Returns:
+        JSON {'msj': ...}.
+    """
     token = request.headers.get('X-Docente-Token', '')
     _DOCENTE_TOKENS.pop(token, None)
     _SESIONES_META.pop(token, None)
@@ -4306,6 +5414,14 @@ def docente_logout():
 
 @app.route('/api/su/docentes_pgnp', methods=['GET'])
 def listar_docentes_pgnp():
+    """Lista todas las cuentas docentes con su condición PGNP (solo Super Usuario).
+
+    Args:
+        Headers: token de super usuario.
+
+    Returns:
+        JSON: lista con id, nombre, email y es_pgnp.
+    """
     err = _exigir_su(request)
     if err:
         return err
@@ -4329,6 +5445,18 @@ def listar_docentes_pgnp():
 
 @app.route('/api/su/docentes_pgnp/<int:docente_id>', methods=['PUT'])
 def configurar_docente_pgnp(docente_id):
+    """Habilita o deshabilita una cuenta docente como PGNP (solo Super Usuario).
+
+    Al quitar la condición cancela sus coberturas pendientes o aprobadas.
+
+    Args:
+        docente_id: ID del docente (URL).
+        JSON del body: es_pgnp (bool).
+        Headers: token de super usuario.
+
+    Returns:
+        JSON con id, nombre, email y es_pgnp; 400 si es_pgnp no es booleano; 404 si no existe.
+    """
     err = _exigir_su(request)
     if err:
         return err
@@ -4363,6 +5491,11 @@ def configurar_docente_pgnp(docente_id):
 
 @app.route('/api/plana_mayor/pgnp', methods=['GET'])
 def listar_pgnp_habilitados():
+    """Lista las cuentas PGNP habilitadas (Plana Mayor o SU).
+
+    Returns:
+        JSON: lista con id y nombre; 403 sin autorización.
+    """
     if not _admin_token_valido(request) and not _su_token_valido(request):
         return jsonify({'error': 'No autorizado'}), 403
     conn = get_db()
@@ -4378,6 +5511,18 @@ def listar_pgnp_habilitados():
 
 @app.route('/api/plana_mayor/coberturas', methods=['GET', 'POST'])
 def gestionar_coberturas_docente():
+    """Lista o crea solicitudes de cobertura docente (Plana Mayor o SU).
+
+    GET devuelve hasta 300 coberturas, filtrables por estado. POST crea una cobertura asignando un PGNP a una clase.
+
+    Args:
+        Query string (GET): estado (solicitada, pendiente, aprobada, rechazada, completada, cancelada).
+        JSON del body (POST): datos de la clase (fecha, aula, turno, titular, materia, hora) y pgnp_id.
+        Headers: token de administración o super usuario.
+
+    Returns:
+        JSON con lista (GET) o cobertura creada (POST); 400 filtros o datos inválidos; 403 sin autorización.
+    """
     if request.method == 'GET':
         if not _admin_token_valido(request) and not _su_token_valido(request):
             return jsonify({'error': 'No autorizado'}), 403
@@ -4482,6 +5627,16 @@ def gestionar_coberturas_docente():
 
 @app.route('/api/plana_mayor/coberturas/<int:cobertura_id>/revisar', methods=['POST'])
 def revisar_cobertura_docente(cobertura_id):
+    """Aprueba o rechaza una solicitud de cobertura (Plana Mayor o SU).
+
+    Args:
+        cobertura_id: ID de la cobertura (URL).
+        JSON del body: decision ('aprobar' o 'rechazar'), pgnp_id (obligatorio al aprobar una solicitud de bedelía).
+        Headers: token de administración o super usuario.
+
+    Returns:
+        JSON de confirmación; 409 si no existe o ya fue revisada; 400 si la decisión o el PGNP son inválidos.
+    """
     if not _admin_token_valido(request) and not _su_token_valido(request):
         return jsonify({'error': 'No autorizado'}), 403
     d = request.json or {}
@@ -4553,6 +5708,14 @@ def revisar_cobertura_docente(cobertura_id):
 
 @app.route('/api/docente/coberturas', methods=['GET'])
 def docente_coberturas_asignadas():
+    """Lista las coberturas aprobadas o completadas del PGNP autenticado (hasta 100).
+
+    Args:
+        Headers: X-Docente-Token.
+
+    Returns:
+        JSON: lista de coberturas; 401 sin sesión; 403 si la cuenta no es PGNP.
+    """
     meta = _docente_token_meta(request)
     if not meta:
         return jsonify({'error': 'Inicie sesión nuevamente para consultar las coberturas.'}), 401
@@ -4583,6 +5746,15 @@ def docente_coberturas_asignadas():
 
 @app.route('/api/docente/coberturas/<int:cobertura_id>/firmar', methods=['POST'])
 def firmar_cobertura_docente(cobertura_id):
+    """Firma una cobertura aprobada del día por el PGNP autenticado.
+
+    Args:
+        cobertura_id: ID de la cobertura (URL).
+        Headers: X-Docente-Token.
+
+    Returns:
+        JSON de confirmación; si ya estaba firmada devuelve 'ya_firmada' true; 401 sin sesión; 403 si no es PGNP; error si no está aprobada o no es de hoy.
+    """
     meta = _docente_token_meta(request)
     if not meta:
         return jsonify({'error': 'Inicie sesión nuevamente para firmar la cobertura.'}), 401
@@ -4591,6 +5763,7 @@ def firmar_cobertura_docente(cobertura_id):
     conn = get_db()
     try:
         with conn.cursor() as cur:
+            # UPDATE condicional atómico: solo firma si está aprobada, es del PGNP y es de hoy, evitando firmas dobles o fuera de fecha
             cur.execute("""
                 UPDATE coberturas_docente
                 SET estado='completada', firmado_en=CURRENT_TIMESTAMP
@@ -4628,6 +5801,14 @@ def firmar_cobertura_docente(cobertura_id):
 
 @app.route('/api/coberturas/aula', methods=['GET'])
 def coberturas_aprobadas_aula():
+    """Lista las coberturas solicitadas, aprobadas o completadas de un aula y turno en una fecha.
+
+    Args:
+        Query string: fecha (AAAA-MM-DD), aula, turno (TM/TT).
+
+    Returns:
+        JSON: lista de coberturas con PGNP, estado y firma; 400 si los parámetros son inválidos.
+    """
     fecha = (request.args.get('fecha') or '').strip()
     aula = (request.args.get('aula') or '').strip().upper()
     turno = (request.args.get('turno') or '').strip().upper()
@@ -4663,6 +5844,14 @@ def coberturas_aprobadas_aula():
 
 @app.route('/api/bedel/coberturas/solicitar', methods=['POST'])
 def bedel_solicitar_cobertura():
+    """Registra una solicitud de cobertura desde bedelía, validada con el PIN del aula.
+
+    Args:
+        JSON del body: pin, aula, turno, fecha (debe ser hoy), titular, materia, hora, motivo (máx. 500).
+
+    Returns:
+        JSON con la solicitud creada; 403 si el PIN es inválido o no corresponde al aula/turno; 400 si los datos son inválidos.
+    """
     d = request.json or {}
     if not isinstance(d, dict):
         return jsonify({'error': 'El cuerpo de la solicitud debe ser un objeto JSON.'}), 400
@@ -4673,6 +5862,7 @@ def bedel_solicitar_cobertura():
     if str(d.get('aula') or '').strip().upper() != aula or str(d.get('turno') or '').strip().upper() != turno:
         return jsonify({'error': 'El PIN no corresponde al aula y turno de la solicitud.'}), 403
     fecha_texto = str(d.get('fecha') or '').strip()
+    # Bedelía solo puede pedir cobertura para hoy para impedir cargas retroactivas o anticipadas
     if fecha_texto != date.today().isoformat():
         return jsonify({'error': 'Bedelía solo puede solicitar cobertura para la fecha actual.'}), 400
     titular = _normalizar_nombre_docente(d.get('titular') or '')
@@ -4727,6 +5917,14 @@ def bedel_solicitar_cobertura():
 
 @app.route('/api/docente/recuperar', methods=['POST'])
 def docente_recuperar():
+    """Restablece la contraseña de un docente verificando email y DNI.
+
+    Args:
+        JSON del body: email, dni, nueva_password.
+
+    Returns:
+        JSON {'msj': ...}; 400 si faltan campos o la contraseña es débil; 404 si no hay cuenta coincidente.
+    """
     d          = request.json or {}
     email      = d.get('email', '').strip().lower()
     dni        = d.get('dni', '').strip()
@@ -4762,6 +5960,16 @@ def docente_recuperar():
 
 @app.route('/api/docente/firmar', methods=['POST'])
 def docente_firmar():
+    """Registra la firma de presencia de un docente mediante el PIN del aula.
+
+    Valida PIN, coordenadas opcionales y que el docente tenga clase en la ventana horaria permitida.
+
+    Args:
+        JSON del body: pin, docente, lat, lng, precision (opcionales).
+
+    Returns:
+        JSON con el resultado de la firma y clasificación de ubicación; 400 datos inválidos; 403 PIN no válido o expirado.
+    """
     d       = request.json or {}
     pin     = str(d.get('pin', '')).strip()
     # Normaliza defensivamente para evitar duplicados / nombres con comas iniciales sueltas
@@ -4776,6 +5984,7 @@ def docente_firmar():
     except (TypeError, ValueError): lng = None
     try: prec = float(prec) if prec is not None else None
     except (TypeError, ValueError): prec = None
+    # Se rechazan coordenadas fuera de rango para no guardar ubicaciones falsas o corruptas
     if lat is not None and not -90 <= lat <= 90:
         return jsonify({'error': 'La latitud recibida no es válida.'}), 400
     if lng is not None and not -180 <= lng <= 180:
@@ -4867,6 +6076,15 @@ def docente_firmar():
 
 @app.route('/api/firmas_docentes', methods=['GET'])
 def get_firmas_docentes():
+    """Consulta firmas de docentes de una fecha (Plana Mayor o SU).
+
+    Args:
+        Query string: fecha (default hoy), docente (contiene), aula, turno.
+        Headers: token de administración o super usuario.
+
+    Returns:
+        JSON: lista de firmas con hora, timestamp UTC y ubicación; 403 sin autorización.
+    """
     if not _admin_token_valido(request) and not _su_token_valido(request):
         return jsonify({'error': 'No autorizado'}), 403
     fecha   = request.args.get('fecha', date.today().isoformat())
@@ -4911,6 +6129,15 @@ def get_firmas_docentes():
 
 @app.route('/api/su/firmas/ubicaciones', methods=['GET'])
 def consultar_ubicaciones_firmas_tic():
+    """Consulta ubicaciones de firmas docentes en un rango (solo Super Usuario).
+
+    Args:
+        Query string: desde, hasta (default hoy), aula, turno (TM/TT), docente.
+        Headers: token de super usuario.
+
+    Returns:
+        JSON con las firmas y su clasificación de geolocalización; 400 si el rango o el turno son inválidos.
+    """
     error = _exigir_su(request)
     if error:
         return error
@@ -4973,7 +6200,15 @@ def consultar_ubicaciones_firmas_tic():
 
 @app.route('/api/firmas_docentes/export', methods=['GET'])
 def exportar_firmas_docentes():
-    """Exporta firmas y estado geográfico para Plana Mayor o TIC."""
+    """Exporta las firmas de docentes de un rango a archivo (Plana Mayor o SU).
+
+    Args:
+        Query string: desde (default hoy), hasta (default desde), y filtros opcionales.
+        Headers: token de administración o super usuario.
+
+    Returns:
+        Archivo descargable con las firmas; 400 si el rango es inválido; 403 sin autorización.
+    """
     if not _admin_token_valido(request) and not _su_token_valido(request):
         return jsonify({'error': 'No autorizado'}), 403
     desde = request.args.get('desde', date.today().isoformat())
@@ -5036,6 +6271,17 @@ def exportar_firmas_docentes():
 
 @app.route('/api/firmas_docentes/historial', methods=['GET'])
 def historial_firmas():
+    """Devuelve el historial de firmas de un rango.
+
+    Plana Mayor y SU pueden consultar cualquier docente; un docente solo el propio, comparando nombres sin acentos.
+
+    Args:
+        Query string: desde (default 2024-01-01), hasta (default hoy), docente, aula, turno.
+        Headers: token de administración, super usuario o X-Docente-Token.
+
+    Returns:
+        JSON con firmas y ausencias calculadas; 403 si no está autorizado.
+    """
     desde   = request.args.get('desde', '2024-01-01')
     hasta   = request.args.get('hasta', date.today().isoformat())
     docente = request.args.get('docente')
@@ -5046,6 +6292,7 @@ def historial_firmas():
         meta = _docente_token_meta(request)
         nombre_solicitado = _normalizar_nombre_docente(docente or '')
         nombre_sesion = _normalizar_nombre_docente(meta['nombre']) if meta else ''
+        # Un docente solo puede ver su propio historial; se comparan nombres sin acentos para tolerar diferencias de escritura
         if not meta or not docente or _sin_acentos(nombre_solicitado).lower() != _sin_acentos(nombre_sesion).lower():
             return jsonify({'error': 'No autorizado para consultar este historial.'}), 403
 
@@ -5093,10 +6340,19 @@ def historial_firmas():
 # ─── CÁLCULO DE AUSENCIAS AUTOMÁTICAS ─────────────────────────────────────
 
 def _calcular_ausencias_docente(cur, docente_filtro, desde_str, hasta_str, firmas_actuales):
-    """
-    Para cada clase pasada del docente en el rango [desde, hasta], si no existe
-    firma registrada y la clase ya terminó (fin + 10 min de tolerancia),
-    devuelve un registro con estado='ausente'. No persiste nada — se calcula on-the-fly.
+    """Calcula al vuelo las clases pasadas de un docente sin firma, marcadas como ausentes.
+
+    Una clase cuenta como ausente cuando ya terminó más 10 minutos de tolerancia y no hay firma; ignora días sin actividad y no persiste nada.
+
+    Args:
+        cur: Cursor de base de datos abierto.
+        docente_filtro: Nombre del docente a evaluar.
+        desde_str: Fecha inicial (AAAA-MM-DD).
+        hasta_str: Fecha final (AAAA-MM-DD).
+        firmas_actuales: Firmas ya existentes para descartar clases firmadas.
+
+    Returns:
+        list de registros con estado 'ausente'; lista vacía si las fechas son inválidas.
     """
     try:
         fecha_ini = datetime.strptime(desde_str, '%Y-%m-%d').date()
@@ -5105,6 +6361,7 @@ def _calcular_ausencias_docente(cur, docente_filtro, desde_str, hasta_str, firma
         return []
 
     ahora     = datetime.now()
+    # Se acota a hoy porque las clases futuras todavía no pueden considerarse ausencias
     fecha_fin = min(fecha_fin, ahora.date())
     if fecha_ini > fecha_fin:
         return []
@@ -5178,9 +6435,21 @@ def _calcular_ausencias_docente(cur, docente_filtro, desde_str, hasta_str, firma
 
 
 def _docente_tiene_clase_ahora(aula, turno, docente, ahora, tol_antes_min, tol_despues_min):
-    """Devuelve True si el docente tiene clase en el aula/turno indicado y ahora está
-    dentro de la ventana operativa [inicio - tol_antes, fin + tol_despues].
-    None si no se pudo determinar (sin cronograma o nombre no matchea)."""
+    """Indica si un docente tiene clase en un aula y turno dentro de la ventana operativa.
+
+    La ventana es inicio menos tolerancia previa hasta fin más tolerancia posterior, y considera los adelantos de horario aplicados.
+
+    Args:
+        aula: Aula a evaluar.
+        turno: Turno (TM/TT).
+        docente: Nombre del docente.
+        ahora: datetime de referencia.
+        tol_antes_min: Minutos de tolerancia antes del inicio.
+        tol_despues_min: Minutos de tolerancia después del fin.
+
+    Returns:
+        True/False, o None si no se pudo determinar (sin cronograma o nombre sin coincidencia).
+    """
     DIAS = ['Lunes','Martes','Miércoles','Jueves','Viernes','Sábado','Domingo']
     dia_hoy = DIAS[ahora.weekday()]
     docente_norm = _sin_acentos(docente).lower().strip()
@@ -5249,7 +6518,17 @@ def _docente_tiene_clase_ahora(aula, turno, docente, ahora, tol_antes_min, tol_d
 
 
 def _clasificar_geolocalizacion(lat, lng, precision=None, parametros=None):
-    """Clasifica una firma sin bloquearla cuando la geolocalización no está configurada."""
+    """Clasifica una coordenada respecto del punto institucional configurado.
+
+    Args:
+        lat: Latitud del dispositivo.
+        lng: Longitud del dispositivo.
+        precision: Precisión GPS en metros (opcional).
+        parametros: Reservado; los parámetros se leen de la configuración.
+
+    Returns:
+        dict con 'estado' (sin_datos, invalida, sin_configurar, dentro o fuera), 'distancia_m' y 'mensaje'.
+    """
     if lat is None or lng is None:
         return {'estado': 'sin_datos', 'distancia_m': None, 'mensaje': 'Sin coordenadas'}
     if not (-90 <= float(lat) <= 90 and -180 <= float(lng) <= 180):
@@ -5265,6 +6544,7 @@ def _clasificar_geolocalizacion(lat, lng, precision=None, parametros=None):
     if not (-90 <= ref_lat <= 90 and -180 <= ref_lng <= 180) or radio <= 0:
         return {'estado': 'sin_configurar', 'distancia_m': None, 'mensaje': 'Punto institucional no configurado'}
 
+    # Distancia por fórmula de haversine con radio terrestre medio en metros; el min(1, hav) evita errores por redondeo
     radio_tierra = 6371000
     lat1, lat2 = math.radians(float(lat)), math.radians(ref_lat)
     dlat = math.radians(ref_lat - float(lat))
@@ -5281,13 +6561,23 @@ def _clasificar_geolocalizacion(lat, lng, precision=None, parametros=None):
 
 
 def _fin_clase_con_tolerancia(fecha_obj, hora_str, tol_min):
-    """Parsea 'HH:MM-HH:MM' y devuelve datetime(fecha, fin) + tol_min."""
+    """Calcula el instante de fin de una clase más una tolerancia.
+
+    Args:
+        fecha_obj: Fecha de la clase (date).
+        hora_str: Rango horario con formato 'HH:MM - HH:MM' (se toma el fin).
+        tol_min: Minutos de tolerancia a sumar.
+
+    Returns:
+        datetime del fin con tolerancia, o None si el horario no se puede interpretar.
+    """
     if not hora_str or '-' not in hora_str:
         return None
     fin_str = hora_str.split('-')[1].strip()
     digitos = re.sub(r'[^\d]', '', fin_str)
     if len(digitos) < 3:
         return None
+    # Se rellena a 4 dígitos para interpretar horas escritas sin separador, como 930 o 0930
     digitos = digitos.zfill(4)
     try:
         hh = int(digitos[:2]); mm = int(digitos[2:4])
@@ -5302,7 +6592,14 @@ def _fin_clase_con_tolerancia(fecha_obj, hora_str, tol_min):
 
 @app.route('/api/horario_docente', methods=['GET'])
 def horario_docente():
-    """Devuelve TODAS las clases del docente con info de firma (para las de HOY)."""
+    """Devuelve el horario semanal de un docente con el estado de hoy.
+
+    Args:
+        Query string: nombre del docente.
+
+    Returns:
+        JSON: lista de bloques ordenados por día y hora, con aula, turno, materia, si ya firmó hoy y si hay cierre del calendario; lista vacía si no hay nombre.
+    """
     nombre = request.args.get('nombre', '').strip()
     if not nombre:
         return jsonify([])
@@ -5412,6 +6709,17 @@ def horario_docente():
 
 @app.route('/api/docente/adelantos-horario', methods=['GET', 'POST'])
 def docente_adelantos_horario():
+    """Lista o registra adelantos de horario de un docente titular.
+
+    GET devuelve los últimos 100 casos propios. POST crea un adelanto validando que la clase original exista en el cronograma del docente y que ninguna de las fechas sea un día sin actividad.
+
+    Args:
+        JSON del body (POST): aula, turno, materia, fecha_original, hora_original, fecha_nueva, hora_nueva.
+        Headers: X-Docente-Token.
+
+    Returns:
+        JSON con casos o el adelanto creado; 401 sin sesión; 403 para cuentas PGNP; 400 datos inválidos.
+    """
     meta = _docente_token_meta(request)
     if not meta:
         return jsonify({'error': 'Inicie sesión nuevamente para gestionar adelantos.'}), 401
@@ -5650,6 +6958,14 @@ def docente_adelantos_horario():
 
 @app.route('/api/adelantos-horario/dia', methods=['GET'])
 def adelantos_horario_dia():
+    """Lista los adelantos de horario aplicados que afectan a un aula en un día.
+
+    Args:
+        Query string: fecha (AAAA-MM-DD), aula, turno (TM/TT).
+
+    Returns:
+        JSON con 'movidas' (clases trasladadas fuera del día) e 'incorporadas' (clases trasladadas al día); 400 si los parámetros son inválidos.
+    """
     try:
         fecha = date.fromisoformat(str(request.args.get('fecha') or '').strip())
     except ValueError:
@@ -5691,6 +7007,14 @@ def adelantos_horario_dia():
 
 @app.route('/api/config_aula', methods=['GET'])
 def get_config_aula_all():
+    """Lista las configuraciones de cronograma por aula.
+
+    Args:
+        Query string: turno (TM/TT, opcional), solo_aulas ('1' devuelve solo pares aula/turno).
+
+    Returns:
+        JSON: lista de aulas con su configuración o solo aula y turno; 400 si el turno es inválido.
+    """
     turno = (request.args.get('turno') or '').strip().upper()
     solo_aulas = request.args.get('solo_aulas') == '1'
     if turno and turno not in ('TM', 'TT'):
@@ -5749,6 +7073,15 @@ def get_config_aula_all():
 
 @app.route('/api/config_aula/<aula>/<turno>', methods=['GET'])
 def get_config_aula(aula, turno):
+    """Devuelve los bloques horarios configurados de un aula y turno.
+
+    Args:
+        aula: Aula (URL).
+        turno: Turno (URL).
+
+    Returns:
+        JSON: lista de bloques; lista vacía si no existe o es inválido.
+    """
     aula  = aula.strip().upper()
     turno = turno.strip().upper()
     conn  = get_db()
@@ -5776,6 +7109,14 @@ def get_config_aula(aula, turno):
 
 @app.route('/api/config_aula', methods=['POST'])
 def guardar_config_aula():
+    """Guarda la configuración de cronograma de un aula, guardando antes una versión previa.
+
+    Args:
+        JSON del body: aula, turno (obligatorios), nombre (máx. 150), config (lista de bloques).
+
+    Returns:
+        JSON de confirmación; 400 si faltan datos, config no es lista o el nombre es muy largo.
+    """
     d     = request.json or {}
     aula  = d.get('aula', '').strip().upper()
     turno = d.get('turno', '').strip().upper()
@@ -5821,6 +7162,14 @@ def guardar_config_aula():
 
 @app.route('/api/upload_padron', methods=['POST'])
 def upload_padron():
+    """Importa el padrón de aspirantes desde un CSV o Excel.
+
+    Args:
+        Form-data: file (CSV/XLSX con columnas AULA, NOMBRE y opcional GRADO), turno (default TM).
+
+    Returns:
+        JSON con el resultado de la importación; 400 si falta el archivo o las columnas; 500 si pandas no está instalado.
+    """
     if 'file' not in request.files:
         return jsonify({'error': 'No se recibió archivo'}), 400
     if not PANDAS_OK:
@@ -5881,6 +7230,14 @@ def upload_padron():
 
 @app.route('/api/upload_word_schedule', methods=['POST'])
 def upload_word_schedule():
+    """Importa un cronograma desde un documento Word y lo guarda por aula.
+
+    Args:
+        Form-data: file (.docx con tablas de DÍA y HORA), turno (default TT).
+
+    Returns:
+        JSON con aulas guardadas, errores y diagnóstico; 400 si no se extraen bloques; 500 si falta python-docx.
+    """
     if not DOCX_OK:
         return jsonify({'error': 'python-docx no instalado. Ejecute: pip install python-docx'}), 500
     if 'file' not in request.files:
@@ -5971,7 +7328,14 @@ def upload_word_schedule():
 
 @app.route('/api/docentes/buscar', methods=['GET'])
 def buscar_docentes():
-    """Busca docentes por apellido (en cronograma) o DNI (en registrados)."""
+    """Busca docentes por nombre o DNI, combinando cuentas registradas y nombres del cronograma.
+
+    Args:
+        Query string: q (mínimo 2 caracteres).
+
+    Returns:
+        JSON: lista de coincidencias con nombre, dni, email y si está registrado; lista vacía si q es corto.
+    """
     q = request.args.get('q', '').strip()
     if not q or len(q) < 2:
         return jsonify([])
@@ -6027,9 +7391,23 @@ def buscar_docentes():
 def _calcular_inasistencias(desde: str, hasta: str, turno: str = '',
                              incluir_justificadas: bool = False,
                              limite: int = 500) -> tuple:
-    """Núcleo de cálculo de inasistencias. Devuelve (lista_ausencias, total_sin_limite).
-    Lanza ValueError si las fechas son inválidas o el rango supera MAX_DIAS.
-    Llamar directamente desde código Python (sin pasar por HTTP)."""
+    """Calcula las inasistencias docentes de un rango.
+
+    Llamable directamente desde Python. Cruza el cronograma con firmas y justificaciones, ignora días sin actividad y fechas futuras.
+
+    Args:
+        desde: Fecha inicial (AAAA-MM-DD).
+        hasta: Fecha final (AAAA-MM-DD).
+        turno: Filtro opcional de turno.
+        incluir_justificadas: Si es True incluye las ausencias justificadas.
+        limite: Máximo de registros devueltos.
+
+    Returns:
+        tuple (registros, total).
+
+    Raises:
+        ValueError: Si las fechas son inválidas o el rango supera 90 días.
+    """
     MAX_DIAS = 90
     try:
         fecha_ini = datetime.strptime(desde, '%Y-%m-%d').date()
@@ -6145,7 +7523,15 @@ def _calcular_inasistencias(desde: str, hasta: str, turno: str = '',
 
 @app.route('/api/inasistencias', methods=['GET'])
 def inasistencias_listado():
-    """Lista ausencias del cuerpo docente. Requiere auth (Plana Mayor o SU)."""
+    """Lista inasistencias docentes de un rango (Plana Mayor o SU).
+
+    Args:
+        Query string: desde, hasta (default hoy), turno, incluir_justificadas ('1'), limite (default 500, máx. 2000).
+        Headers: token de administración o super usuario.
+
+    Returns:
+        JSON con registros y headers X-Total-Count y X-Limite; 400 si el rango es inválido; 403 sin autorización.
+    """
     if not _admin_token_valido(request) and not _su_token_valido(request):
         return jsonify({'error': 'No autorizado'}), 403
     desde  = request.args.get('desde', date.today().isoformat())
@@ -6165,7 +7551,14 @@ def inasistencias_listado():
 
 @app.route('/api/justificacion_ausencia', methods=['POST'])
 def justificar_ausencia():
-    """Registra (o actualiza) la justificación de una ausencia."""
+    """Registra una justificación de ausencia aprobada directamente.
+
+    Args:
+        JSON del body: docente, aula, turno, fecha, motivo (obligatorios), comentario, registrado_por.
+
+    Returns:
+        JSON de confirmación; 400 si faltan campos obligatorios. Si ya existía se actualiza.
+    """
     d = request.json or {}
     docente   = d.get('docente', '').strip()
     aula      = d.get('aula', '').strip().upper()
@@ -6214,6 +7607,14 @@ def justificar_ausencia():
 
 @app.route('/api/justificacion_ausencia', methods=['DELETE'])
 def eliminar_justificacion():
+    """Elimina una justificación de ausencia.
+
+    Args:
+        JSON del body: docente, aula, turno, fecha.
+
+    Returns:
+        JSON {'msj': ...}; 500 ante error.
+    """
     d = request.json or {}
     conn = get_db()
     try:
@@ -6234,8 +7635,16 @@ def eliminar_justificacion():
 
 @app.route('/api/docente/pendientes', methods=['GET'])
 def docente_pendientes():
-    """Devuelve clases del docente en los últimos N días que NO tienen firma
-    ni justificación activa (aprobada o pendiente). Excluye HOY (ya se ve en MIS MATERIAS)."""
+    """Lista las clases recientes de un docente sin firma ni justificación activa.
+
+    Excluye el día de hoy y los días sin actividad.
+
+    Args:
+        Query string: nombre del docente, dias (default 7).
+
+    Returns:
+        JSON: lista de clases pendientes; lista vacía si falta el nombre.
+    """
     nombre = request.args.get('nombre', '').strip()
     try:
         dias = int(request.args.get('dias', '7'))
@@ -6340,6 +7749,14 @@ def docente_pendientes():
 
 @app.route('/api/docente/justificaciones', methods=['GET'])
 def docente_justificaciones():
+    """Lista las justificaciones del docente autenticado (hasta 100).
+
+    Args:
+        Headers: X-Docente-Token.
+
+    Returns:
+        JSON: lista con fecha, aula, turno, motivo, comentario, estado y revisión; 401 sin sesión. La respuesta no se cachea.
+    """
     meta = _docente_token_meta(request)
     if not meta:
         respuesta = jsonify({'error': 'Inicie sesión nuevamente para consultar sus justificaciones.'})
@@ -6369,8 +7786,16 @@ def docente_justificaciones():
 
 @app.route('/api/docente/justificar', methods=['POST'])
 def docente_autojustificar():
-    """El docente justifica su propia ausencia. Requiere reingresar password
-    como firma digital de conformidad. Queda en estado='pendiente'."""
+    """Permite a un docente justificar su propia ausencia con su contraseña como conformidad.
+
+    La justificación queda en estado 'pendiente' hasta la revisión de Plana Mayor.
+
+    Args:
+        JSON del body: email, password, aula, turno, fecha, motivo, comentario (todos obligatorios).
+
+    Returns:
+        JSON de confirmación; 400 si faltan campos; 401 si las credenciales son incorrectas.
+    """
     d = request.json or {}
     email     = d.get('email', '').strip().lower()
     password  = d.get('password', '')
@@ -6448,6 +7873,15 @@ def docente_autojustificar():
 
 @app.route('/api/justificacion/aprobar', methods=['POST'])
 def aprobar_justificacion():
+    """Aprueba una justificación pendiente (Plana Mayor o SU).
+
+    Args:
+        JSON del body: docente, aula, turno, fecha, revisado_por (default 'Plana Mayor'), observacion_revision.
+        Headers: token de administración o super usuario.
+
+    Returns:
+        JSON de confirmación; 404 si no está pendiente o no existe; 403 sin autorización.
+    """
     if not _admin_token_valido(request) and not _su_token_valido(request):
         return jsonify({'error': 'No autorizado'}), 403
     d = request.json or {}
@@ -6485,6 +7919,15 @@ def aprobar_justificacion():
 
 @app.route('/api/justificacion/pendientes', methods=['GET'])
 def listar_justificaciones_pendientes():
+    """Lista justificaciones pendientes o ya resueltas (Plana Mayor o SU).
+
+    Args:
+        Query string: estado ('pendiente' o 'resueltas').
+        Headers: token de administración o super usuario.
+
+    Returns:
+        JSON con las justificaciones y el total de pendientes; 400 si el estado es inválido; 403 sin autorización.
+    """
     if not _admin_token_valido(request) and not _su_token_valido(request):
         return jsonify({'error': 'No autorizado'}), 403
     estado_filtro = request.args.get('estado', 'pendiente')
@@ -6534,6 +7977,15 @@ def listar_justificaciones_pendientes():
 
 @app.route('/api/justificacion/rechazar', methods=['POST'])
 def rechazar_justificacion():
+    """Rechaza una justificación pendiente (Plana Mayor o SU).
+
+    Args:
+        JSON del body: docente, aula, turno, fecha, revisado_por (default 'Plana Mayor'), observacion_revision.
+        Headers: token de administración o super usuario.
+
+    Returns:
+        JSON de confirmación; 404 si no está pendiente o no existe; 403 sin autorización.
+    """
     if not _admin_token_valido(request) and not _su_token_valido(request):
         return jsonify({'error': 'No autorizado'}), 403
     d = request.json or {}
@@ -6571,13 +8023,21 @@ def rechazar_justificacion():
 
 @app.route('/api/justificacion/<int:jid>/adjuntar', methods=['POST'])
 def justificacion_adjuntar(jid):
-    """Sube un archivo (certif. médico, parte de servicio, etc.) y lo asocia
-    a una justificación existente. Acepta PDF/JPG/PNG hasta 5 MB."""
+    """Adjunta un comprobante a una justificación existente (PDF, JPG, PNG o WEBP, máx. 5 MB).
+
+    Args:
+        jid: ID de la justificación (URL).
+        Form-data: archivo.
+
+    Returns:
+        JSON de confirmación; 400 si falta el archivo, el formato no está permitido o supera el tamaño.
+    """
     if 'archivo' not in request.files:
         return jsonify({'error':'Adjunte un archivo en el campo "archivo"'}), 400
     f = request.files['archivo']
     if not f.filename:
         return jsonify({'error':'Nombre de archivo vacío'}), 400
+    # Se sanea el nombre del archivo y se limita su largo para evitar path traversal y nombres peligrosos
     nombre_safe = re.sub(r'[^A-Za-z0-9._-]', '_', f.filename)[:120]
     extension = (nombre_safe.rsplit('.',1)[-1] if '.' in nombre_safe else '').lower()
     if extension not in {'pdf','jpg','jpeg','png','webp'}:
@@ -6589,6 +8049,7 @@ def justificacion_adjuntar(jid):
     path_final = os.path.join(upl_dir, nombre_final)
 
     data = f.read()
+    # El límite de tamaño se valida sobre los bytes leídos porque el cliente no es confiable
     if len(data) > 5 * 1024 * 1024:
         return jsonify({'error':'Archivo demasiado grande (máx 5 MB)'}), 400
     with open(path_final, 'wb') as fh:
@@ -6621,7 +8082,15 @@ def justificacion_adjuntar(jid):
 
 @app.route('/api/justificacion/<int:jid>/adjunto', methods=['GET'])
 def justificacion_descargar(jid):
-    """Devuelve el archivo adjunto (auth: admin o SU)."""
+    """Descarga el adjunto de una justificación (Plana Mayor o SU).
+
+    Args:
+        jid: ID de la justificación (URL).
+        Headers: token de administración o super usuario.
+
+    Returns:
+        Archivo como descarga; 404 si no tiene adjunto; 403 sin autorización.
+    """
     if not _admin_token_valido(request) and not _su_token_valido(request):
         return jsonify({'error':'No autorizado'}), 403
     conn = get_db()
@@ -6639,7 +8108,15 @@ def justificacion_descargar(jid):
 
 @app.route('/api/inasistencias/export', methods=['GET'])
 def exportar_inasistencias():
-    """Genera CSV de las inasistencias del rango. Requiere auth (Plana Mayor o SU)."""
+    """Genera un CSV con las inasistencias de un rango (Plana Mayor o SU).
+
+    Args:
+        Query string: desde, hasta (default hoy), turno, incluir_justificadas (default '1').
+        Headers: token de administración o super usuario.
+
+    Returns:
+        Respuesta text/csv adjunta, separada por punto y coma; 400 si el rango es inválido.
+    """
     if not _admin_token_valido(request) and not _su_token_valido(request):
         return jsonify({'error': 'No autorizado'}), 403
     desde        = request.args.get('desde', date.today().isoformat())
@@ -6669,7 +8146,15 @@ def exportar_inasistencias():
 
 @app.route('/api/reporte_operativo/export', methods=['GET'])
 def exportar_reporte_operativo():
-    """Exporta en un único CSV minutas, firmas y ausencias del período."""
+    """Exporta un CSV único con minutas, firmas y ausencias del período (Plana Mayor o SU).
+
+    Args:
+        Query string: desde (default hoy), hasta (default desde), turno, aula.
+        Headers: token de administración o super usuario.
+
+    Returns:
+        Respuesta text/csv adjunta; 400 si el rango es inválido; 403 sin autorización.
+    """
     if not _admin_token_valido(request) and not _su_token_valido(request):
         return jsonify({'error': 'No autorizado'}), 403
     desde = request.args.get('desde', date.today().isoformat())
@@ -6750,7 +8235,15 @@ def exportar_reporte_operativo():
 
 @app.route('/api/reporte_operativo/print', methods=['GET'])
 def imprimir_reporte_operativo():
-    """Genera una vista HTML imprimible del reporte operativo consolidado."""
+    """Genera una vista HTML imprimible del reporte operativo consolidado (Plana Mayor o SU).
+
+    Args:
+        Query string: desde (default hoy), hasta (default desde), turno, aula.
+        Headers: token de administración o super usuario.
+
+    Returns:
+        Página HTML; 400 si el rango es inválido; 403 sin autorización.
+    """
     if not _admin_token_valido(request) and not _su_token_valido(request):
         return jsonify({'error': 'No autorizado'}), 403
     desde = request.args.get('desde', date.today().isoformat())
@@ -6855,8 +8348,17 @@ th{{background:#e8f1f6;color:#123b5d}} tr{{page-break-inside:avoid}}
 # ═══════════════════════════════════════════════════════════════════════════
 @app.route('/api/parte_pdf', methods=['GET'])
 def parte_pdf_view():
-    """Genera una página HTML lista para imprimir (Ctrl+P → PDF) con membrete GNA.
-    Params: ?fecha=YYYY-MM-DD&aula=17&turno=TM"""
+    """Genera el parte diario como HTML imprimible (Ctrl+P para guardar PDF) con membrete institucional.
+
+    Args:
+        fecha (query, opcional): Fecha YYYY-MM-DD; por defecto hoy.
+        aula (query, opcional): Filtra por aula.
+        turno (query, opcional): Filtra por turno (TM/TT).
+        Headers: token de admin o de SU (validado con las funciones de token).
+
+    Returns:
+        Response text/html con una seccion por minuta (cronograma, firmas, ausentes y novedades), o JSON 403 si no esta autorizado.
+    """
     if not _admin_token_valido(request) and not _su_token_valido(request):
         return jsonify({'error': 'No autorizado'}), 403
 
@@ -7027,6 +8529,15 @@ def parte_pdf_view():
 # ═══════════════════════════════════════════════════════════════════════════
 @app.route('/api/su/audit_log', methods=['GET'])
 def su_audit_log():
+    """Lista las ultimas entradas del registro de auditoria. Solo SU.
+
+    Args:
+        limit (query, opcional): Cantidad maxima de filas (por defecto 100, tope 500).
+        Headers: X-SU-Token.
+
+    Returns:
+        JSON con una lista de registros (id, fecha, usuario, rol, accion, tabla, registro_ref, detalle, ip), del mas reciente al mas antiguo.
+    """
     err = _exigir_su(request)
     if err: return err
     limit = min(int(request.args.get('limit', 100)), 500)
@@ -7045,7 +8556,14 @@ def su_audit_log():
 
 @app.route('/api/su/rate_limit', methods=['GET'])
 def su_rate_limit_estado():
-    """Lista el estado actual del rate limiter (IPs bloqueadas y con intentos fallidos). Solo SU."""
+    """Informa el estado actual del rate limiter de login. Solo SU.
+
+    Args:
+        Headers: X-SU-Token.
+
+    Returns:
+        JSON con total_entradas, ips_bloqueadas, max_intentos, bloqueo_segundos y la lista de entradas (ip, intentos, bloqueada, bloqueada_hasta, segundos_restantes), con las bloqueadas primero.
+    """
     err = _exigir_su(request)
     if err: return err
     ahora = datetime.now()
@@ -7072,7 +8590,15 @@ def su_rate_limit_estado():
 
 @app.route('/api/su/rate_limit/<path:ip>', methods=['DELETE'])
 def su_rate_limit_desbloquear(ip):
-    """Desbloquea una IP específica del rate limiter. Solo SU."""
+    """Desbloquea una IP puntual del rate limiter. Solo SU.
+
+    Args:
+        ip (URL): Direccion IP a desbloquear.
+        Headers: X-SU-Token.
+
+    Returns:
+        JSON con 'msj' indicando si la IP fue desbloqueada o no estaba registrada.
+    """
     err = _exigir_su(request)
     if err: return err
     if ip in _RATE_LIMIT:
@@ -7084,7 +8610,14 @@ def su_rate_limit_desbloquear(ip):
 
 @app.route('/api/su/rate_limit', methods=['DELETE'])
 def su_rate_limit_limpiar_todo():
-    """Limpia todo el rate limiter. Solo SU."""
+    """Vacia por completo el rate limiter, desbloqueando todas las IPs. Solo SU.
+
+    Args:
+        Headers: X-SU-Token.
+
+    Returns:
+        JSON con 'msj' y la cantidad de entradas eliminadas.
+    """
     err = _exigir_su(request)
     if err: return err
     n = len(_RATE_LIMIT)
@@ -7095,6 +8628,15 @@ def su_rate_limit_limpiar_todo():
 
 @app.route('/api/su/failed_logins', methods=['GET'])
 def su_failed_logins():
+    """Lista los intentos de login fallidos recientes. Solo SU.
+
+    Args:
+        limit (query, opcional): Cantidad maxima de filas (por defecto 100, tope 500).
+        Headers: X-SU-Token.
+
+    Returns:
+        JSON con una lista de registros (id, fecha, tipo, detalle, ip), del mas reciente al mas antiguo.
+    """
     err = _exigir_su(request)
     if err: return err
     limit = min(int(request.args.get('limit', 100)), 500)
@@ -7113,6 +8655,15 @@ def su_failed_logins():
 
 @app.route('/api/su/system_log', methods=['GET'])
 def su_system_log():
+    """Lista las ultimas entradas del log del sistema (errores y eventos). Solo SU.
+
+    Args:
+        limit (query, opcional): Cantidad maxima de filas (por defecto 100, tope 500).
+        Headers: X-SU-Token.
+
+    Returns:
+        JSON con una lista de registros (id, fecha, nivel, endpoint, mensaje, traceback), del mas reciente al mas antiguo.
+    """
     err = _exigir_su(request)
     if err: return err
     limit = min(int(request.args.get('limit', 100)), 500)
@@ -7136,6 +8687,15 @@ _APP_STARTED_AT = datetime.now()
 
 @app.route('/api/su/maintenance', methods=['POST'])
 def su_maintenance_toggle():
+    """Activa o desactiva el modo mantenimiento y avisa a los clientes SSE. Solo SU.
+
+    Args:
+        activo (JSON): Valor booleano; true activa el modo mantenimiento.
+        Headers: X-SU-Token.
+
+    Returns:
+        JSON con 'msj' y 'activo'. Devuelve 500 con 'error' si falla la base de datos.
+    """
     err = _exigir_su(request)
     if err: return err
     d = request.json or {}
@@ -7171,6 +8731,14 @@ def su_maintenance_toggle():
 
 @app.route('/api/su/health', methods=['GET'])
 def su_health():
+    """Devuelve el estado de salud del sistema. Solo SU.
+
+    Args:
+        Headers: X-SU-Token.
+
+    Returns:
+        JSON con uptime, cantidad de sesiones SU/admin, estado y version de la base, filas por tabla, modo mantenimiento, estado del bot de Telegram (consulta getMe) y si el scheduler y el bot estan activos.
+    """
     err = _exigir_su(request)
     if err: return err
     status = {
@@ -7250,6 +8818,15 @@ def su_health():
 # ═══════════════════════════════════════════════════════════════════════════
 @app.route('/api/su/revoke_tokens', methods=['POST'])
 def su_revoke_tokens():
+    """Revoca sesiones activas segun el alcance indicado. Solo SU.
+
+    Args:
+        scope (JSON, opcional): 'admin' (por defecto), 'su' o 'all'. 'su' conserva el token del propio solicitante; 'all' tambien revoca docentes.
+        Headers: X-SU-Token.
+
+    Returns:
+        JSON con 'msj' (cantidad revocada) y 'scope'.
+    """
     err = _exigir_su(request)
     if err: return err
     d = request.json or {}
@@ -7260,6 +8837,7 @@ def su_revoke_tokens():
         _ADMIN_TOKENS.clear()
     if scope in ('su','all'):
         # No revocar el propio token activo
+        # El SU que ejecuta la revocacion conserva su propio token para no quedar fuera de la sesion
         tok_actual = request.headers.get('X-SU-Token','')
         otros = [t for t in _SU_TOKENS if t != tok_actual]
         revocados += len(otros)
@@ -7275,6 +8853,16 @@ def su_revoke_tokens():
 
 @app.route('/api/su/reset_docente_password', methods=['POST'])
 def su_reset_docente():
+    """Resetea la contrasena de un docente y cierra sus sesiones abiertas. Solo SU.
+
+    Args:
+        email (JSON): Email del docente.
+        new_password (JSON, opcional): Nueva clave; si falta se genera una aleatoria de 8 caracteres.
+        Headers: X-SU-Token.
+
+    Returns:
+        JSON con 'msj' y 'nueva_password'; 400 si falta el email, 404 si no existe, 500 ante error de base.
+    """
     err = _exigir_su(request)
     if err: return err
     d = request.json or {}
@@ -7310,6 +8898,14 @@ def su_reset_docente():
 
 @app.route('/api/su/listar_docentes', methods=['GET'])
 def su_listar_docentes():
+    """Lista todas las cuentas de docentes ordenadas por nombre. Solo SU.
+
+    Args:
+        Headers: X-SU-Token.
+
+    Returns:
+        JSON con una lista de docentes (id, nombre, email, dni, creado_en).
+    """
     err = _exigir_su(request)
     if err: return err
     conn = get_db()
@@ -7330,6 +8926,15 @@ def su_listar_docentes():
 # ═══════════════════════════════════════════════════════════════════════════
 @app.route('/api/su/hard_reset_cronograma', methods=['POST'])
 def su_hard_reset_cronograma():
+    """Purga por completo el cronograma maestro (TRUNCATE) tras una confirmacion textual. Solo SU.
+
+    Args:
+        confirmacion (JSON): Debe ser exactamente 'PURGAR CRONOGRAMA'.
+        Headers: X-SU-Token.
+
+    Returns:
+        JSON con 'msj' y las filas eliminadas; 400 si la frase es incorrecta, 500 ante error de base.
+    """
     err = _exigir_su(request)
     if err: return err
     d = request.json or {}
@@ -7361,7 +8966,14 @@ _SSE_SUBS = {}            # id_conexion → queue.Queue
 _SSE_LOCK = threading.Lock()
 
 def _sse_notificar(evento_dict):
-    """Push un evento a todos los suscriptores activos. No bloquea."""
+    """Publica un evento a todos los suscriptores SSE sin bloquear.
+
+    Args:
+        evento_dict: Diccionario del evento; su clave 'tipo' define el nombre del evento SSE.
+
+    Returns:
+        None. Elimina las suscripciones cuya cola ya no acepta eventos.
+    """
     with _SSE_LOCK:
         muertos = []
         for qid, q in _SSE_SUBS.items():
@@ -7374,7 +8986,11 @@ def _sse_notificar(evento_dict):
 
 
 def _sse_suscribir():
-    """Crea cola dedicada para esta conexión. Devuelve (id, cola)."""
+    """Crea una cola dedicada para una nueva conexion SSE y la registra.
+
+    Returns:
+        Tupla (id de conexion, cola de eventos) con capacidad maxima de 200 eventos.
+    """
     q = _queue.Queue(maxsize=200)
     qid = secrets.token_hex(8)
     with _SSE_LOCK:
@@ -7383,12 +8999,24 @@ def _sse_suscribir():
 
 
 def _sse_desuscribir(qid):
+    """Elimina la suscripcion SSE indicada, si existe.
+
+    Args:
+        qid: Identificador de la conexion devuelto por _sse_suscribir.
+    """
     with _SSE_LOCK:
         _SSE_SUBS.pop(qid, None)
 
 
 def _token_admin_o_su_via_query(req):
-    """EventSource no soporta headers personalizados → token viene por query."""
+    """Valida un token de admin o SU enviado por query string, ya que EventSource no admite headers.
+
+    Args:
+        req: Objeto request de Flask; se lee el parametro 'token'.
+
+    Returns:
+        True si el token es de admin vigente o de SU valido; False en otro caso.
+    """
     tok = req.args.get('token', '')
     if not tok: return False
     # Aceptamos token de admin o de SU
@@ -7396,16 +9024,19 @@ def _token_admin_o_su_via_query(req):
         v = _ADMIN_TOKENS.get(tok)
         if isinstance(v, datetime) and v > datetime.now():
             return True
-    if tok in _SU_TOKENS:
-        v = _SU_TOKENS.get(tok)
-        if isinstance(v, datetime) and v > datetime.now():
-            return True
-    return False
+    return _su_token_ok(tok)
 
 
 @app.route('/api/sse/monitor', methods=['GET'])
 def sse_monitor():
-    """Stream de eventos en tiempo real. Auth por query string ?token=XXX."""
+    """Abre un stream Server-Sent Events con eventos en tiempo real (firmas, justificaciones, alertas).
+
+    Args:
+        token (query): Token de admin o SU.
+
+    Returns:
+        Response text/event-stream con eventos 'conectado', eventos del sistema, pings periodicos y 'token_expirado'; JSON 403 si el token no es valido.
+    """
     if not _token_admin_o_su_via_query(request):
         return jsonify({'error':'No autorizado (token en query string requerido)'}), 403
 
@@ -7414,6 +9045,11 @@ def sse_monitor():
     revalidaciones = 0
 
     def generar():
+        """Generador del stream SSE: emite los eventos de la cola, pings de keep-alive y revalida el token.
+
+        Returns:
+            Generador de cadenas en formato SSE. Termina si recibe None, si el token expira o si el cliente se desconecta, y siempre desuscribe la conexion.
+        """
         nonlocal revalidaciones
         yield f"event: conectado\ndata: {json.dumps({'qid': qid, 'ts': datetime.now().isoformat()})}\n\n"
         try:
@@ -7426,12 +9062,12 @@ def sse_monitor():
                     yield f"event: {tipo}\ndata: {json.dumps(evt, default=str)}\n\n"
                 except _queue.Empty:
                     # Cada 60s (cada 2-3 timeouts) re-validar token contra los stores actuales
+                    # El token se revalida cada dos timeouts porque un stream abierto no pasa por la autenticacion normal y podria seguir vivo con un token vencido
                     revalidaciones += 1
                     if revalidaciones % 2 == 0:
                         v_adm = _ADMIN_TOKENS.get(token_inicial)
-                        v_su  = _SU_TOKENS.get(token_inicial)
                         valido = (isinstance(v_adm, datetime) and v_adm > datetime.now()) or \
-                                 (isinstance(v_su,  datetime) and v_su  > datetime.now())
+                                 _su_token_ok(token_inicial)
                         if not valido:
                             yield f"event: token_expirado\ndata: {json.dumps({'ts': datetime.now().isoformat()})}\n\n"
                             break
@@ -7452,7 +9088,14 @@ def sse_monitor():
 
 @app.route('/api/sse/stats', methods=['GET'])
 def sse_stats():
-    """Cuántos clientes hay escuchando — útil para diagnóstico."""
+    """Informa cuantos clientes SSE estan conectados. Solo SU.
+
+    Args:
+        Headers: X-SU-Token.
+
+    Returns:
+        JSON con 'conexiones_activas' y la lista de 'ids'.
+    """
     err = _exigir_su(request)
     if err: return err
     return jsonify({
@@ -7465,7 +9108,18 @@ def sse_stats():
 # VERSIONADO DE CRONOGRAMAS — historial + restore
 # ═══════════════════════════════════════════════════════════════════════════
 def _guardar_version_cronograma(cur, aula, turno, motivo='Sobrescritura', creado_por='Sistema'):
-    """Antes de sobrescribir un cronograma, guarda la versión actual en cronograma_versiones."""
+    """Guarda la version actual de un cronograma en cronograma_versiones antes de sobrescribirlo.
+
+    Args:
+        cur: Cursor de base de datos de la transaccion en curso.
+        aula: Aula del cronograma.
+        turno: Turno del cronograma.
+        motivo: Motivo del versionado.
+        creado_por: Autor registrado en la version.
+
+    Returns:
+        None. Si no hay cronograma o falla, no versiona y solo imprime el error.
+    """
     try:
         cur.execute("""
             SELECT config_json FROM cronograma_maestro
@@ -7491,7 +9145,16 @@ def _guardar_version_cronograma(cur, aula, turno, motivo='Sobrescritura', creado
 
 @app.route('/api/su/cronograma_versiones', methods=['GET'])
 def su_cronograma_versiones():
-    """Lista versiones históricas de un aula+turno o todas."""
+    """Lista versiones historicas de cronogramas. Solo SU.
+
+    Args:
+        aula (query, opcional): Aula a filtrar; requiere tambien turno.
+        turno (query, opcional): Turno a filtrar.
+        Headers: X-SU-Token.
+
+    Returns:
+        JSON con una lista (id, aula, turno, creado_en, creado_por, motivo, bloques_cnt): hasta 50 si hay filtro, o 100 en total.
+    """
     err = _exigir_su(request)
     if err: return err
     aula  = request.args.get('aula', '').strip().upper()
@@ -7520,7 +9183,15 @@ def su_cronograma_versiones():
 
 @app.route('/api/su/cronograma_versiones/<int:vid>/restaurar', methods=['POST'])
 def su_cronograma_restaurar(vid):
-    """Restaura una versión guardada (y guarda la actual como otra versión, como undo)."""
+    """Restaura un cronograma desde una version guardada, snapshotando antes el estado actual como respaldo. Solo SU.
+
+    Args:
+        vid (URL): Id de la version a restaurar.
+        Headers: X-SU-Token.
+
+    Returns:
+        JSON con 'msj'; 404 si la version no existe, 500 ante error de base.
+    """
     err = _exigir_su(request)
     if err: return err
     conn = get_db()
@@ -7572,14 +9243,22 @@ _SQL_BLOQUEADAS = re.compile(
 
 @app.route('/api/su/sql', methods=['POST'])
 def su_sql_console():
-    """Ejecuta una query SELECT y devuelve hasta 500 filas. Bloquea cualquier
-       comando que modifique datos. La transacción siempre se rollbackea."""
+    """Ejecuta una consulta de solo lectura en la consola SQL de TIC. Solo SU.
+
+    Args:
+        query (JSON): Sentencia unica SELECT, WITH, SHOW o EXPLAIN; se agrega LIMIT 500 si no tiene LIMIT.
+        Headers: X-SU-Token.
+
+    Returns:
+        JSON con cols, rows, count y truncated. 400 si es vacia o invalida, 403 si usa comandos bloqueados.
+    """
     err = _exigir_su(request)
     if err: return err
     d = request.json or {}
     query = (d.get('query') or '').strip().rstrip(';')
     if not query:
         return jsonify({'error':'Query vacía'}), 400
+    # Defensa en capas: lista negra de palabras, sentencia unica, prefijo permitido, transaccion read-only y rollback final
     if _SQL_BLOQUEADAS.search(query):
         return jsonify({'error':'Solo se permiten queries SELECT. Comandos de modificación bloqueados.'}), 403
     # Rechazar múltiples sentencias por si acaso
@@ -7592,6 +9271,7 @@ def su_sql_console():
     try:
         # Forzar transacción read-only para defensa en profundidad
         with conn.cursor() as cur:
+            # La transaccion de solo lectura impide escrituras aunque el filtro por regex fuera eludido
             cur.execute("SET TRANSACTION READ ONLY")
             cur.execute("SET LOCAL statement_timeout = '10s'")
             tiene_limit = bool(re.search(r'\bLIMIT\s+\d+', query, re.IGNORECASE))
@@ -7619,19 +9299,31 @@ def su_sql_console():
 # ═══════════════════════════════════════════════════════════════════════════
 @app.route('/tv')
 def tv_dashboard():
-    """Vista fullscreen para TV de oficina. Sin auth (pero sin datos sensibles)."""
+    """Sirve la pagina del dashboard para TV de oficina, sin autenticacion.
+
+    Returns:
+        HTML de la plantilla tv.html.
+    """
     return render_template('tv.html')
 
 
 @app.route('/status')
 def status_publico():
-    """Página de estado pública. Sin auth, sin datos sensibles."""
+    """Sirve la pagina publica de estado del sistema, sin autenticacion.
+
+    Returns:
+        HTML de la plantilla status.html.
+    """
     return render_template('status.html')
 
 
 @app.route('/api/tv/datos', methods=['GET'])
 def tv_datos():
-    """JSON para el dashboard TV. Cero datos personales — sólo agregados."""
+    """Entrega los datos agregados del dashboard TV, sin datos personales.
+
+    Returns:
+        JSON con kpis del dia, detalle por aula con porcentaje de asistencia, tendencia de 7 dias, ultimas 8 firmas, fecha y hora; 500 con 'error' ante falla.
+    """
     try:
         conn = get_db()
         with conn.cursor() as cur:
@@ -7703,7 +9395,11 @@ def tv_datos():
 
 @app.route('/api/status/public', methods=['GET'])
 def status_publico_api():
-    """Status público sin auth. Solo info no sensible: servicios up/down + uptime."""
+    """Devuelve el estado publico del sistema, sin autenticacion y sin datos sensibles.
+
+    Returns:
+        JSON con estado de web, db, bot y scheduler, latencia de la base en ms, uptime del proceso, incidentes ERROR de los ultimos 7 dias, ultima caida y timestamp.
+    """
     estado = {
         'web':     True,    # si responde es porque está up
         'db':      False,
@@ -7762,8 +9458,14 @@ def status_publico_api():
 
 @app.route('/api/su/duplicados', methods=['GET'])
 def su_duplicados():
-    """Detecta posibles duplicados de docentes usando canonicalización por tokens
-    de apellido + similitud. Útil para fusionar GARCIA vs García vs GARCIA, JUAN."""
+    """Detecta posibles docentes duplicados por nombre canonico y por email repetido. Solo SU.
+
+    Args:
+        Headers: X-SU-Token.
+
+    Returns:
+        JSON con duplicados_por_nombre (grupos de 2 o mas registros), duplicados_por_email y total_docentes; 500 ante error.
+    """
     err = _exigir_su(request)
     if err: return err
     try:
@@ -7823,10 +9525,16 @@ def su_duplicados():
 
 @app.route('/api/su/fusionar_docente', methods=['POST'])
 def su_fusionar_docente():
-    """Fusiona docente_origen → docente_destino:
-       - Mueve firmas, justificaciones, cronograma al destino
-       - Borra el origen
-       - Todo en una transacción"""
+    """Fusiona un docente de origen en uno de destino: mueve sus firmas y justificaciones y borra el origen, en una transaccion. Solo SU.
+
+    Args:
+        id_origen (JSON): Id del docente a eliminar.
+        id_destino (JSON): Id del docente que lo reemplaza.
+        Headers: X-SU-Token.
+
+    Returns:
+        JSON con ok, msj, firmas_movidas y justif_movidas; 400 si los ids son invalidos, 404 si no existen.
+    """
     err = _exigir_su(request)
     if err: return err
     d = request.json or {}
@@ -7874,6 +9582,14 @@ def su_fusionar_docente():
 
 
 def _analizar_vinculaciones_docentes(cur):
+    """Analiza que nombres de docentes del cronograma no tienen cuenta y sugiere vinculaciones.
+
+    Args:
+        cur: Cursor de base de datos.
+
+    Returns:
+        Tupla (resultados, cuentas, pares_seguros): grupos de nombres sin cuenta con sus bloques y sugerencias, cuentas no PGNP con sus aulas vinculadas, y coincidencias automaticas seguras por nombre.
+    """
     cur.execute("""
         SELECT id, nombre, email, dni
         FROM docentes
@@ -7972,6 +9688,7 @@ def _analizar_vinculaciones_docentes(cur):
                 if similitud >= 0.92:
                     candidatos.append((similitud, cuenta))
 
+        # Solo se acepta un candidato si es unico o si supera al segundo por un margen claro, para no vincular al docente equivocado
         candidatos.sort(key=lambda item: (-item[0], item[1]['nombre'].casefold()))
         if candidatos and (len(candidatos) == 1 or candidatos[0][0] - candidatos[1][0] >= 0.08):
             pares_seguros[nombre] = {
@@ -8019,6 +9736,16 @@ def _analizar_vinculaciones_docentes(cur):
 
 @app.route('/api/su/vinculaciones_docentes', methods=['GET', 'POST'])
 def su_vinculaciones_docentes():
+    """Consulta o aplica la vinculacion de nombres del cronograma con cuentas de docentes. Solo SU.
+
+    Args:
+        GET: sin parametros.
+        POST (JSON): nombre (nombre en el cronograma), docente_id (cuenta destino), bloques (lista de {aula, turno, indice}, maximo 250).
+        Headers: X-SU-Token.
+
+    Returns:
+        GET: JSON con sin_cuenta, cuentas y auto_vinculables. POST: JSON con ok, msj y bloques_actualizados; 400/404/409 ante datos invalidos o cambios concurrentes.
+    """
     err = _exigir_su(request)
     if err:
         return err
@@ -8075,6 +9802,7 @@ def su_vinculaciones_docentes():
         actualizados = 0
         destino = None
         with conn.cursor() as cur:
+            # FOR UPDATE bloquea la cuenta destino para que no cambie mientras se vinculan los bloques
             cur.execute("""
                 SELECT id, nombre, es_pgnp FROM docentes
                 WHERE id=%s FOR UPDATE
@@ -8148,6 +9876,15 @@ def su_vinculaciones_docentes():
 
 @app.route('/api/su/vinculaciones_docentes/aplicar-seguras', methods=['POST'])
 def su_vinculaciones_docentes_aplicar_seguras():
+    """Aplica en lote las vinculaciones automaticas marcadas como seguras. Solo SU.
+
+    Args:
+        vinculaciones (JSON): Lista de 1 a 250 objetos {nombre, docente_id} que deben coincidir con las sugerencias seguras actuales.
+        Headers: X-SU-Token.
+
+    Returns:
+        JSON con ok, msj y bloques_actualizados; 400 si la seleccion es invalida, 409 si la coincidencia cambio.
+    """
     err = _exigir_su(request)
     if err:
         return err
@@ -8247,6 +9984,15 @@ def su_vinculaciones_docentes_aplicar_seguras():
 
 @app.route('/api/su/vinculaciones_docentes/aplicar-lote', methods=['POST'])
 def su_vinculaciones_docentes_aplicar_lote():
+    """Aplica vinculaciones de varios nombres a cuentas, en modo seguro o manual. Solo SU.
+
+    Args:
+        vinculaciones (JSON): Lista de 1 a 250 objetos {nombre, docente_id, modo ('segura'|'manual'), bloques (solo manual)}.
+        Headers: X-SU-Token.
+
+    Returns:
+        JSON con ok, msj y bloques_actualizados; 400 por datos invalidos, 409 si algo cambio, es ambiguo o hay homonimos.
+    """
     err = _exigir_su(request)
     if err:
         return err
@@ -8392,13 +10138,13 @@ def su_vinculaciones_docentes_aplicar_lote():
 
 @app.route('/api/su/huerfanos', methods=['GET'])
 def su_huerfanos():
-    """Detecta datos huérfanos:
-       - Firmas de docentes que NO existen en la tabla docentes (puede ser válido si recién se cargó cronograma)
-       - Justif. de docentes que no están en cronograma ni en docentes
-       - Minutas duplicadas (mismo aula+fecha+turno, debería ser 0 por constraint)
-       - Aspirantes en aulas sin cronograma
-       - Cronograma sin aspirantes
-       - Tokens caducos
+    """Detecta datos huerfanos o inconsistentes y residuos a limpiar. Solo SU.
+
+    Args:
+        Headers: X-SU-Token.
+
+    Returns:
+        JSON con firmas_sin_cuenta, aspirantes_sin_cronograma, cronograma_sin_aspirantes, justif_sin_docente, docentes_cronograma_sin_cuenta, tokens_caducos, recordatorios_viejos, system_log_viejo, failed_logins_viejo y total_hallazgos.
     """
     err = _exigir_su(request)
     if err: return err
@@ -8512,9 +10258,18 @@ def su_huerfanos():
 
 @app.route('/api/su/limpiar_huerfanos', methods=['POST'])
 def su_limpiar_huerfanos():
-    """Limpia los huérfanos según las opciones que mande el front.
-       d: {tokens_caducos: bool, recordatorios_viejos: bool, system_log: bool, failed_logins: bool}
-       (Las cosas críticas como 'firmas sin cuenta' NUNCA se borran automáticamente)"""
+    """Limpia datos obsoletos segun las opciones indicadas; nunca borra firmas sin cuenta. Solo SU.
+
+    Args:
+        tokens_caducos (JSON, bool): Borra tokens de vinculacion vencidos o usados.
+        recordatorios_viejos (JSON, bool): Borra recordatorios enviados hace mas de 30 dias.
+        system_log (JSON, bool): Borra logs de mas de 90 dias.
+        failed_logins (JSON, bool): Borra logins fallidos de mas de 90 dias.
+        Headers: X-SU-Token.
+
+    Returns:
+        JSON con ok, msj, borrado (por categoria) y total.
+    """
     err = _exigir_su(request)
     if err: return err
     d = request.json or {}
@@ -8553,7 +10308,14 @@ def su_limpiar_huerfanos():
 
 @app.route('/api/su/sesiones_activas', methods=['GET'])
 def su_sesiones_activas():
-    """Devuelve todas las sesiones activas (SU + Plana Mayor + Bedeles por firmas + Docentes)."""
+    """Lista las sesiones activas: SU y Plana Mayor, bedeles y docentes con firmas recientes. Solo SU.
+
+    Args:
+        Headers: X-SU-Token.
+
+    Returns:
+        JSON con sesiones (rol, usuario, ip, tiempos de actividad), total, stats por rol y ahora. Los bedeles y docentes se infieren de firmas de los ultimos 60 y 30 minutos.
+    """
     err = _exigir_su(request)
     if err: return err
     ahora = datetime.now()
@@ -8648,7 +10410,15 @@ def su_sesiones_activas():
 
 @app.route('/api/su/forzar_logout', methods=['POST'])
 def su_forzar_logout():
-    """Cierra una sesión específica por token (solo SU/Plana Mayor)."""
+    """Cierra una sesion especifica por token. Solo SU.
+
+    Args:
+        token (JSON): Token de la sesion a cerrar.
+        Headers: X-SU-Token.
+
+    Returns:
+        JSON con ok y msj; 400 si falta el token, 404 si no existe o ya expiro.
+    """
     err = _exigir_su(request)
     if err: return err
     d   = request.json or {}
@@ -8680,8 +10450,15 @@ def su_forzar_logout():
 
 @app.route('/api/su/buscar_global', methods=['GET'])
 def su_buscar_global():
-    """Búsqueda global tipo Spotlight: busca en docentes, cronograma, aulas,
-    justificaciones, audit_log y minutas con una sola query unificada."""
+    """Busqueda global tipo Spotlight en docentes, aulas, cronograma, justificaciones, minutas y auditoria. Solo SU.
+
+    Args:
+        q (query): Texto a buscar (minimo 2 caracteres).
+        Headers: X-SU-Token.
+
+    Returns:
+        JSON con 'resultados' (tipo, icono, titulo, subtitulo, accion) y 'total'; lista vacia si q es muy corta.
+    """
     err = _exigir_su(request)
     if err: return err
     q = (request.args.get('q') or '').strip().upper()
@@ -8786,6 +10563,15 @@ def su_buscar_global():
 
 @app.route('/api/su/dashboard', methods=['GET'])
 def su_dashboard():
+    """Devuelve los datos agregados del dashboard de SU (KPIs, series, geolocalizacion y resumen ejecutivo). Solo SU.
+
+    Args:
+        rango (query, opcional): Dias a analizar (1 a 365, por defecto 7).
+        Headers: X-SU-Token.
+
+    Returns:
+        JSON con kpis, comparacion con el periodo anterior, series de firmas y auditoria por dia, minutas por turno, top ausentes, por_rol, geo_alertas y resumen_ejecutivo.
+    """
     err = _exigir_su(request)
     if err: return err
 
@@ -8801,6 +10587,7 @@ def su_dashboard():
     desde = hoy - timedelta(days=rango_dias - 1)  # incluye hoy
 
     # Período anterior para comparación (mismo largo, justo antes de 'desde')
+    # El periodo anterior tiene el mismo largo que el actual para que la comparacion sea equivalente
     prev_hasta = desde - timedelta(days=1)
     prev_desde = prev_hasta - timedelta(days=rango_dias - 1)
 
@@ -8954,6 +10741,7 @@ def su_dashboard():
         audit_data  = [audit_serie.get(d, 0)  for d in dias]
 
         # Variación porcentual vs período anterior
+        # Si no habia firmas previas no se puede dividir: se informa 100 por ciento si ahora hay firmas y 0 si no
         if firmas_prev_total > 0:
             variacion_pct = round((firmas_actual_total - firmas_prev_total) / firmas_prev_total * 100, 1)
         else:
@@ -9008,10 +10796,20 @@ def su_dashboard():
 
 @app.route('/api/su/dashboard/print', methods=['GET'])
 def su_dashboard_print():
+    """Genera el resumen ejecutivo del dashboard como HTML imprimible. Solo SU.
+
+    Args:
+        rango (query, opcional): Dias a analizar (1 a 365, por defecto 7).
+        token (query, opcional): Token SU alternativo al header, para abrir en una pestana nueva.
+        Headers: X-SU-Token.
+
+    Returns:
+        Response text/html sin cache; JSON 403 si no hay autenticacion SU.
+    """
     tok = request.headers.get('X-SU-Token', request.args.get('token', ''))
-    if tok and tok in _SU_TOKENS and _SU_TOKENS[tok] > datetime.now():
+    if _su_token_ok(tok):
         _tocar_sesion(tok)
-    elif not tok or tok not in _SU_TOKENS or _SU_TOKENS[tok] <= datetime.now():
+    else:
         return jsonify({'error': 'Esta operación requiere autenticación de Super Usuario (TIC).'}), 403
 
     try:
@@ -9194,6 +10992,15 @@ def su_dashboard_print():
 
 @app.route('/api/su/dashboard/export', methods=['GET'])
 def su_dashboard_export():
+    """Exporta el resumen ejecutivo del periodo como CSV. Solo SU.
+
+    Args:
+        rango (query, opcional): Dias a analizar (1 a 365, por defecto 7).
+        Headers: X-SU-Token.
+
+    Returns:
+        Response text/csv adjunto con totales de minutas, firmas y justificaciones por estado, aula mas activa y top docentes.
+    """
     err = _exigir_su(request)
     if err:
         return err
@@ -9263,6 +11070,15 @@ def su_dashboard_export():
 # ═══════════════════════════════════════════════════════════════════════════
 @app.route('/api/su/restore_backup', methods=['POST'])
 def su_restore_backup():
+    """Restaura la base de datos desde un archivo JSON de backup. Solo SU.
+
+    Args:
+        file (multipart): Archivo .json con la clave 'tablas', cada una con 'columnas' y 'filas'.
+        Headers: X-SU-Token.
+
+    Returns:
+        JSON con 'msj', 'resumen' por tabla y hasta 25 'errores' de filas omitidas; 400 si el archivo es invalido, 500 ante error de base.
+    """
     err = _exigir_su(request)
     if err: return err
     if 'file' not in request.files:
@@ -9289,6 +11105,7 @@ def su_restore_backup():
                      'recordatorios_telegram','bot_comando_log']
             # Truncar SOLO las tablas que vienen en este backup (whitelist = orden).
             # Así, restaurar un backup viejo (sin Telegram/versiones) no borra esas tablas.
+            # Solo se truncan las tablas presentes en el backup para no borrar datos de tablas que un backup viejo no incluye
             presentes = [t for t in orden
                          if isinstance(data['tablas'].get(t), dict)
                          and 'filas' in data['tablas'][t]]
@@ -9306,6 +11123,7 @@ def su_restore_backup():
                 col_list     = ','.join(cols)
                 ok_cnt, err_cnt = 0, 0
                 for row in filas:
+                    # Un savepoint por fila permite omitir filas invalidas sin abortar toda la restauracion
                     sp = f"sp_{tabla}_{ok_cnt+err_cnt}"
                     try:
                         cur.execute(f"SAVEPOINT {sp}")
@@ -9352,7 +11170,15 @@ def su_restore_backup():
 # ═══════════════════════════════════════════════════════════════════════════
 @app.route('/api/su/archivar_ciclo', methods=['POST'])
 def su_archivar_ciclo():
-    """Mueve minutas y firmas de un año a tablas _archivo (solo lectura)."""
+    """Mueve minutas y firmas de un ano anterior a las tablas _archivo. Solo SU.
+
+    Args:
+        anio (JSON): Ano a archivar; debe ser mayor o igual a 2000 y anterior al actual.
+        Headers: X-SU-Token.
+
+    Returns:
+        JSON con 'msj', minutas_archivadas y firmas_archivadas; 400 si el ano es invalido, 500 ante error.
+    """
     err = _exigir_su(request)
     if err: return err
     d = request.json or {}
@@ -9374,6 +11200,7 @@ def su_archivar_ciclo():
                 CREATE TABLE IF NOT EXISTS firmas_archivo (LIKE firmas_docentes INCLUDING ALL)
             """)
             # Mover (INSERT + DELETE)
+            # Se copia a la tabla de archivo antes de borrar y todo va en una transaccion para no perder datos si algo falla
             cur.execute("""
                 INSERT INTO minutas_archivo SELECT * FROM minutas
                 WHERE EXTRACT(YEAR FROM fecha) = %s
@@ -9409,7 +11236,15 @@ def su_archivar_ciclo():
 # SU — CONSULTA Y EXPORTACIÓN DEL ARCHIVO HISTÓRICO
 # ═══════════════════════════════════════════════════════════════════════════
 def _archivo_existe(cur, tabla):
-    """Devuelve True si la tabla _archivo existe en la BD actual."""
+    """Indica si una tabla de archivo existe en el esquema public.
+
+    Args:
+        cur: Cursor de base de datos.
+        tabla: Nombre de la tabla.
+
+    Returns:
+        True si existe; False si no existe o la consulta falla.
+    """
     try:
         cur.execute("""
             SELECT 1 FROM information_schema.tables
@@ -9421,7 +11256,16 @@ def _archivo_existe(cur, tabla):
 
 
 def _fuentes_archivo(cur, tipo, origen):
-    """Tablas a consultar: archivo (ciclos cerrados) y/o operativa (ciclo en curso)."""
+    """Determina las tablas a consultar segun el origen pedido.
+
+    Args:
+        cur: Cursor de base de datos.
+        tipo: 'minutas' o 'firmas'.
+        origen: 'archivo', 'actual' o 'todo'.
+
+    Returns:
+        Lista de tuplas (nombre de tabla, etiqueta 'Archivado' o 'En curso').
+    """
     archivo = 'minutas_archivo' if tipo == 'minutas' else 'firmas_archivo'
     actual = 'minutas' if tipo == 'minutas' else 'firmas_docentes'
     fuentes = []
@@ -9434,7 +11278,14 @@ def _fuentes_archivo(cur, tipo, origen):
 
 @app.route('/api/su/archivo_resumen', methods=['GET'])
 def su_archivo_resumen():
-    """Devuelve los años disponibles en las tablas de archivo + conteos."""
+    """Resume los anos disponibles y la cantidad de filas en las tablas de archivo y operativas. Solo SU.
+
+    Args:
+        Headers: X-SU-Token.
+
+    Returns:
+        JSON con minutas_archivo, firmas_archivo, minutas_actual y firmas_actual; cada uno con 'existe' y 'anios' (anio, filas).
+    """
     err = _exigir_su(request)
     if err: return err
     conn = get_db()
@@ -9489,7 +11340,19 @@ def su_archivo_resumen():
 
 @app.route('/api/su/archivo_consultar', methods=['GET'])
 def su_archivo_consultar():
-    """Lista filas del archivo según tipo (minutas|firmas) + filtros."""
+    """Consulta filas de minutas o firmas del archivo y/o del ciclo en curso. Solo SU.
+
+    Args:
+        tipo (query): 'minutas' (por defecto) o 'firmas'.
+        anio, aula, turno (query, opcionales): Filtros.
+        docente (query, opcional): Filtro parcial, solo para firmas.
+        origen (query): 'archivo', 'actual' o 'todo' (por defecto).
+        limit (query): Maximo de filas (1 a 1000, por defecto 200).
+        Headers: X-SU-Token.
+
+    Returns:
+        JSON con filas, total y limit; 400 por parametros invalidos.
+    """
     err = _exigir_su(request)
     if err: return err
     tipo  = (request.args.get('tipo') or 'minutas').lower()
@@ -9564,7 +11427,17 @@ def su_archivo_consultar():
 
 @app.route('/api/su/archivo_export', methods=['GET'])
 def su_archivo_export():
-    """Exporta CSV del archivo histórico de un año dado."""
+    """Exporta a CSV las minutas o firmas del archivo y/o del ciclo en curso. Solo SU.
+
+    Args:
+        tipo (query): 'minutas' (por defecto) o 'firmas'.
+        anio (query, opcional): Ano a exportar.
+        origen (query): 'archivo', 'actual' o 'todo' (por defecto).
+        Headers: X-SU-Token.
+
+    Returns:
+        Response text/csv adjunto (separador punto y coma, con BOM); 400 por parametros invalidos, 404 si no hay datos.
+    """
     err = _exigir_su(request)
     if err: return err
     tipo = (request.args.get('tipo') or 'minutas').lower()
@@ -9638,7 +11511,11 @@ _SCHEDULER_RUNNING = False
 _LAST_BACKUP_AT = None
 
 def _generar_backup_archivo():
-    """Genera backup completo y lo guarda en disco."""
+    """Genera un backup JSON completo de las tablas del sistema y lo guarda en disco.
+
+    Returns:
+        Ruta del archivo creado. Actualiza la marca del ultimo backup y rota los backups antiguos.
+    """
     global _LAST_BACKUP_AT
     tablas = ['cronograma_maestro','aspirantes','docentes','minutas',
               'firmas_docentes','justificaciones_ausencia','config_sistema',
@@ -9674,7 +11551,11 @@ def _generar_backup_archivo():
 
 
 def _rotar_backups():
-    """Elimina los backups automáticos más antiguos si superan el límite configurado."""
+    """Elimina los backups automaticos mas antiguos que superen el limite max_backups configurado (por defecto 30).
+
+    Returns:
+        None. Los errores se ignoran.
+    """
     try:
         params = _cargar_params()
         max_bk = int(params.get('max_backups', {}).get('valor', '30') or 30)
@@ -9694,7 +11575,17 @@ def _rotar_backups():
 _LAST_REPORTE_AT = None
 
 def _enviar_email_reporte(destinatarios, asunto, cuerpo_txt, csv_data=None):
-    """Envío por SMTP (config en env). Retorna True si se envió OK."""
+    """Envia un correo por SMTP, con CSV adjunto opcional, usando la configuracion de variables de entorno.
+
+    Args:
+        destinatarios: Email o lista de emails.
+        asunto: Asunto del mensaje.
+        cuerpo_txt: Cuerpo en texto plano.
+        csv_data: Contenido CSV a adjuntar (opcional).
+
+    Returns:
+        True si se envio. Lanza RuntimeError si falta SMTP_HOST o SMTP_USER.
+    """
     from email.message import EmailMessage
     host = os.getenv('SMTP_HOST', '')
     port = int(os.getenv('SMTP_PORT', '587'))
@@ -9721,7 +11612,11 @@ def _enviar_email_reporte(destinatarios, asunto, cuerpo_txt, csv_data=None):
 
 
 def _generar_reporte_diario_csv():
-    """Genera el CSV de inasistencias de los últimos 7 días para el reporte."""
+    """Genera el CSV de inasistencias (incluidas las justificadas) de los ultimos 7 dias.
+
+    Returns:
+        Tupla (texto CSV con BOM y separador punto y coma, total de inasistencias).
+    """
     desde = (date.today() - timedelta(days=6)).isoformat()
     hasta = date.today().isoformat()
     data, total = _calcular_inasistencias(desde, hasta, incluir_justificadas=True, limite=2000)
@@ -9740,7 +11635,11 @@ def _generar_reporte_diario_csv():
 
 
 def _limpiar_tokens_expirados():
-    """Elimina tokens SU y Admin vencidos de los diccionarios en memoria."""
+    """Elimina de memoria los tokens SU y admin ya vencidos, junto con sus datos asociados.
+
+    Returns:
+        None.
+    """
     ahora = datetime.now()
     su_expirados = [t for t, exp in list(_SU_TOKENS.items()) if exp < ahora]
     for t in su_expirados:
@@ -9754,7 +11653,11 @@ def _limpiar_tokens_expirados():
 
 
 def _scheduler_loop():
-    """Corre cada minuto. Verifica: (1) backup diario, (2) reporte diario por email, (3) limpieza de tokens."""
+    """Bucle del scheduler que corre cada 45 segundos: limpia tokens, hace backup diario, envia reporte por email y dispara las alertas programadas de Telegram.
+
+    Returns:
+        None. Corre en un hilo hasta que _SCHEDULER_RUNNING sea False.
+    """
     global _SCHEDULER_RUNNING, _LAST_BACKUP_AT, _LAST_REPORTE_AT
     while _SCHEDULER_RUNNING:
         try:
@@ -9775,6 +11678,7 @@ def _scheduler_loop():
                 if ahora.hour == int(hh) and ahora.minute == int(mm):
                     if (not _LAST_BACKUP_AT or (ahora - _LAST_BACKUP_AT).total_seconds() > 90):
                         # Marcar ANTES de ejecutar para evitar dobles disparos si la operación tarda
+                        # Se marca antes de ejecutar para evitar doble disparo si el backup tarda mas de un minuto
                         _LAST_BACKUP_AT = ahora
                         try:
                             path = _generar_backup_archivo()
@@ -9820,6 +11724,15 @@ def _scheduler_loop():
                 hoy_iso = ahora.date().isoformat()
 
                 def _ya_disparo(last_at, ventana_s=90):
+                    """Indica si una tarea ya se disparo dentro de la ventana de tiempo, para evitar duplicados.
+
+                    Args:
+                        last_at: Datetime del ultimo disparo, o None.
+                        ventana_s: Ventana en segundos (por defecto 90).
+
+                    Returns:
+                        Verdadero si hubo un disparo reciente; falso o None en caso contrario.
+                    """
                     return last_at and (ahora - last_at).total_seconds() < ventana_s
 
                 # 3.1 PINs del día a las 06:00
@@ -9922,9 +11835,11 @@ def _scheduler_loop():
         _time_mod.sleep(45)
 
 def _intentar_adquirir_scheduler_lock():
-    """Crea un archivo .lock que indica 'soy yo el que corre el scheduler'.
-    Si ya existe y el PID dentro sigue vivo, este proceso NO arranca scheduler.
-    Funciona para gunicorn multi-worker, no requiere fcntl (cross-platform)."""
+    """Intenta tomar el lock del scheduler mediante un archivo .scheduler.lock con el PID, para que corra en un solo worker.
+
+    Returns:
+        True si este proceso debe iniciar el scheduler; False si otro proceso vivo ya tiene el lock. Ante error inesperado devuelve True.
+    """
     lock_path = os.path.join(_BACKUP_DIR, '.scheduler.lock')
     try:
         if os.path.exists(lock_path):
@@ -9933,6 +11848,7 @@ def _intentar_adquirir_scheduler_lock():
                     pid_viejo = int(fh.read().strip())
                 # Verificar si ese PID sigue vivo
                 try:
+                    # os.kill con senal 0 solo comprueba si el PID sigue vivo, sin enviarle ninguna senal
                     os.kill(pid_viejo, 0)  # 0 = no envía nada, solo testea
                     return False  # vivo, otro worker ya tiene el lock
                 except (ProcessLookupError, OSError):
@@ -9947,6 +11863,11 @@ def _intentar_adquirir_scheduler_lock():
         return True  # Mejor arrancar de más que de menos
 
 def _iniciar_scheduler():
+    """Inicia el hilo del scheduler y el bot de Telegram si este proceso obtiene el lock.
+
+    Returns:
+        None. No hace nada si ya esta corriendo o si otro worker tiene el lock.
+    """
     global _SCHEDULER_THREAD, _SCHEDULER_RUNNING
     if _SCHEDULER_RUNNING: return
     if not _intentar_adquirir_scheduler_lock():
@@ -9967,6 +11888,14 @@ def _iniciar_scheduler():
 
 @app.route('/api/su/backups_listado', methods=['GET'])
 def su_backups_listado():
+    """Lista los archivos de backup JSON disponibles. Solo SU.
+
+    Args:
+        Headers: X-SU-Token.
+
+    Returns:
+        JSON con archivos (nombre, tamano_kb, fecha), directorio y ultimo_auto.
+    """
     err = _exigir_su(request)
     if err: return err
     archivos = []
@@ -9989,8 +11918,18 @@ def su_backups_listado():
 
 @app.route('/api/su/backup_descargar/<nombre>', methods=['GET'])
 def su_backup_descargar(nombre):
+    """Descarga un archivo de backup JSON. Solo SU.
+
+    Args:
+        nombre (URL): Nombre del archivo; solo se aceptan caracteres seguros terminados en .json.
+        Headers: X-SU-Token.
+
+    Returns:
+        El archivo como adjunto; 400 si el nombre es invalido, 404 si no existe.
+    """
     err = _exigir_su(request)
     if err: return err
+    # Whitelist estricta del nombre para impedir path traversal al descargar backups
     if not re.match(r'^[A-Za-z0-9_.-]+\.json$', nombre):
         return jsonify({'error':'Nombre inválido'}), 400
     path = os.path.join(_BACKUP_DIR, nombre)
@@ -10004,8 +11943,17 @@ def su_backup_descargar(nombre):
 # ═══════════════════════════════════════════════════════════════════════════
 @app.route('/api/su/impersonar', methods=['POST'])
 def su_impersonar():
-    """Emite un token temporal que el SU puede usar como si fuese un docente
-       específico, para reproducir y depurar errores que reportan los usuarios."""
+    """Emite un token temporal (30 minutos) para actuar como un docente o admin y depurar problemas. Solo SU.
+
+    Args:
+        rol (JSON): 'docente' o 'admin'.
+        sujeto (JSON): Email del docente o usuario admin.
+        motivo (JSON): Motivo de al menos 5 caracteres; queda auditado.
+        Headers: X-SU-Token.
+
+    Returns:
+        JSON con token, rol, persona, sujeto, duracion_min y msj; 400 por datos invalidos, 404 si el sujeto no existe.
+    """
     err = _exigir_su(request)
     if err: return err
     d = request.json or {}
@@ -10042,6 +11990,7 @@ def su_impersonar():
 
     tok = secrets.token_urlsafe(20)
     # Tokens de impersonación duran solo 30 minutos
+    # La impersonacion expira rapido (30 minutos) para limitar el riesgo de un token con privilegios prestados
     _ADMIN_TOKENS[tok] = datetime.now() + timedelta(minutes=30)
     _ADMIN_TOKENS[tok+'__user'] = payload
     _ADMIN_TOKENS[tok+'__impersonacion'] = {
@@ -10057,6 +12006,14 @@ def su_impersonar():
 
 @app.route('/api/su/impersonar_fin', methods=['POST'])
 def su_impersonar_fin():
+    """Cierra la sesi?n de impersonaci?n y registra la acci?n.
+
+    Args:
+    token: Token de superusuario recibido en el JSON del cuerpo.
+
+    Returns:
+    JSON con el resultado del cierre o el error de autorizaci?n.
+    """
     err = _exigir_su(request)
     if err: return err
     d = request.json or {}
@@ -10075,6 +12032,15 @@ def su_impersonar_fin():
 
 @app.route('/api/limpiar_sistema', methods=['POST'])
 def limpiar_sistema():
+    """Vac?a las tablas operativas tras validar una confirmaci?n expl?cita.
+
+    Args:
+    confirmacion: Frase de confirmaci?n enviada en el JSON del cuerpo.
+    Header de autenticaci?n SU validado por _exigir_su.
+
+    Returns:
+    JSON con el resultado; usa 400 si la frase no coincide y 500 ante error de base de datos.
+    """
     err = _exigir_su(request)
     if err: return err
     d = request.json or {}
@@ -10083,6 +12049,7 @@ def limpiar_sistema():
         return jsonify({'error': 'Frase incorrecta. Debe escribir exactamente: CONFIRMAR FORMATEO INSTITUCIONAL'}), 400
     conn = get_db()
     try:
+        # La frase de confirmaci?n anterior reduce el riesgo de ejecutar este vaciado irreversible por una solicitud accidental.
         with conn.cursor() as cur:
             cur.execute(
                 "TRUNCATE TABLE firmas_docentes, minutas, aspirantes, "
@@ -10153,7 +12120,11 @@ _TELEGRAM_TIMEOUT_S = 8
 
 
 def _telegram_config_actual() -> dict[str, str | bool] | None:
-    """Lee config de Telegram desde config_sistema. Cero llamadas a Telegram si está incompleto."""
+    """Obtiene la configuraci?n de Telegram y comprueba que est? completa.
+
+    Returns:
+    Diccionario con token, chat_id y estado activo, o None si faltan datos o falla la lectura.
+    """
     try:
         p = _cargar_params()
     except Exception:
@@ -10167,7 +12138,17 @@ def _telegram_config_actual() -> dict[str, str | bool] | None:
 
 
 def _telegram_post(token: str, chat_id: str, texto: str, parse_mode: str = 'HTML') -> tuple[bool, str]:
-    """POST a la API de Telegram. Retorna (ok, msg)."""
+    """Env?a un mensaje a Telegram y normaliza el resultado de la API.
+
+    Args:
+    token: Credencial del bot.
+    chat_id: Identificador del grupo o destinatario.
+    texto: Contenido del mensaje, limitado al m?ximo admitido.
+    parse_mode: Formato de Telegram, HTML por defecto.
+
+    Returns:
+    Tupla con indicador de ?xito y detalle del env?o.
+    """
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     payload = {
         'chat_id': chat_id,
@@ -10191,7 +12172,14 @@ def _telegram_post(token: str, chat_id: str, texto: str, parse_mode: str = 'HTML
 
 
 def _formatear_minuta_telegram(m: dict) -> str:
-    """Arma el mensaje de texto (HTML) que se envía al grupo."""
+    """Construye el mensaje HTML de Telegram a partir de una minuta.
+
+    Args:
+    m: Datos de aula, turno, fecha, asistencia, ausentes, bedeles y novedades.
+
+    Returns:
+    Texto HTML listo para enviar, con datos din?micos escapados y ausentes limitados.
+    """
     aula  = m.get('aula', '?')
     turno = m.get('turno', '?')
     fecha = m.get('fecha', '')
@@ -10253,10 +12241,14 @@ def _formatear_minuta_telegram(m: dict) -> str:
 
 
 def _enviar_minuta_telegram(minuta_dict: dict, forzar: bool = False) -> tuple[bool, str]:
-    """
-    Envía la minuta al grupo configurado. Si forzar=False, respeta el toggle 'telegram_activo'.
-    No bloquea ni propaga excepciones — diseñado para llamarse en un thread daemon.
-    Retorna (ok, mensaje) para casos de test/reenvío manual.
+    """Env?a una minuta al grupo seg?n la configuraci?n de env?o autom?tico.
+
+    Args:
+    minuta_dict: Datos que se pasan al formateador de minutas.
+    forzar: Si es verdadero, permite enviar aunque el env?o autom?tico est? desactivado.
+
+    Returns:
+    Tupla con indicador de ?xito y mensaje; absorbe excepciones para no interrumpir el hilo llamador.
     """
     try:
         cfg = _telegram_config_actual()
@@ -10284,7 +12276,14 @@ def _enviar_minuta_telegram(minuta_dict: dict, forzar: bool = False) -> tuple[bo
 
 @app.route('/api/su/telegram/config', methods=['GET'])
 def su_telegram_get_config():
-    """Devuelve config actual (token ocultado)."""
+    """Consulta la configuraci?n de Telegram sin revelar el token completo.
+
+    Args:
+    Header de autenticaci?n SU validado por _su_token_valido.
+
+    Returns:
+    JSON con token enmascarado, chat_id, estados y alertas; 403 si el token SU no es v?lido.
+    """
     if not _su_token_valido(request):
         return jsonify({'error': 'Token SU inválido'}), 403
     p = _cargar_params()
@@ -10318,7 +12317,15 @@ def su_telegram_get_config():
 
 @app.route('/api/su/telegram/config', methods=['POST'])
 def su_telegram_set_config():
-    """Guarda token/chat_id/toggle. Si token llega vacío, conserva el anterior."""
+    """Guarda las credenciales y opciones de integraci?n de Telegram.
+
+    Args:
+    Header de autenticaci?n SU validado por _su_token_valido.
+    Body JSON con token, chat_id, activo, bot_interactivo y alerts.
+
+    Returns:
+    JSON de confirmaci?n o error; conserva el token existente si el campo llega vac?o.
+    """
     if not _su_token_valido(request):
         return jsonify({'error': 'Token SU inválido'}), 403
     d = request.json or {}
@@ -10386,7 +12393,15 @@ def su_telegram_set_config():
 
 @app.route('/api/su/telegram/enviar_manual', methods=['POST'])
 def su_telegram_enviar_manual():
-    """Permite a TIC disparar manualmente cualquier reporte sin esperar al cron."""
+    """Genera y env?a manualmente un reporte de Telegram seleccionado.
+
+    Args:
+    Header de autenticaci?n SU validado por _su_token_valido.
+    Body JSON con tipo, clave del reporte a generar.
+
+    Returns:
+    JSON con estado y mensaje; usa 400 para tipo desconocido o configuraci?n incompleta y 500 ante error.
+    """
     if not _su_token_valido(request):
         return jsonify({'error': 'Token SU inválido'}), 403
     cfg = _telegram_config_actual()
@@ -10418,7 +12433,14 @@ def su_telegram_enviar_manual():
 
 @app.route('/api/su/telegram/stats', methods=['GET'])
 def su_telegram_stats():
-    """Estadísticas de uso del bot (mensajes enviados, comandos recibidos, errores)."""
+    """Consulta m?tricas recientes de los mensajes de Telegram registrados.
+
+    Args:
+    Header de autenticaci?n SU validado por _su_token_valido.
+
+    Returns:
+    JSON con ?xitos, advertencias y errores de los ?ltimos siete d?as, m?s diez eventos recientes; 403 o 500 ante error.
+    """
     if not _su_token_valido(request):
         return jsonify({'error': 'Token SU inválido'}), 403
     try:
@@ -10453,7 +12475,14 @@ def su_telegram_stats():
 
 @app.route('/api/su/telegram/test', methods=['POST'])
 def su_telegram_test():
-    """Envía un mensaje de prueba para verificar que la config funciona."""
+    """Env?a un mensaje de prueba a la configuraci?n activa de Telegram.
+
+    Args:
+    Header de autenticaci?n SU validado por _su_token_valido.
+
+    Returns:
+    JSON con resultado y mensaje; usa 400 si falta configuraci?n y 403 si falla la autorizaci?n.
+    """
     if not _su_token_valido(request):
         return jsonify({'error': 'Token SU inválido'}), 403
     cfg = _telegram_config_actual()
@@ -10493,7 +12522,15 @@ _LAST_TG_LOGIN_SOSP_AT    = None  # antiflood: una alerta cada N minutos máximo
 
 
 def _tg_enviar(texto: str, parse_mode: str = 'HTML') -> bool:
-    """Helper genérico: envía un mensaje al grupo configurado, ignorando si Telegram no está activo."""
+    """Env?a un mensaje al grupo configurado sin propagar fallos de Telegram.
+
+    Args:
+    texto: Mensaje que se enviar?.
+    parse_mode: Formato de Telegram, HTML por defecto.
+
+    Returns:
+    Booleano que indica si el env?o se complet? correctamente.
+    """
     try:
         cfg = _telegram_config_actual()
         if not cfg:
@@ -10505,7 +12542,14 @@ def _tg_enviar(texto: str, parse_mode: str = 'HTML') -> bool:
 
 
 def _tg_alert_activa(clave: str) -> bool:
-    """True si la alerta indicada está activa en config_sistema."""
+    """Comprueba si una alerta est? habilitada en la configuraci?n del sistema.
+
+    Args:
+    clave: Nombre de la opci?n de alerta que se consulta.
+
+    Returns:
+    True si su valor es 1; False si est? desactivada o no se pudo leer.
+    """
     try:
         p = _cargar_params()
         return (p.get(clave, {}).get('valor') or '0') == '1'
@@ -10516,7 +12560,11 @@ def _tg_alert_activa(clave: str) -> bool:
 # ─── Generadores de reportes y alertas ────────────────────────────────────
 
 def _tg_reporte_diario_consolidado() -> str:
-    """Resumen del día con todas las minutas (18:00)."""
+    """Genera el resumen diario consolidado de minutas y firmas.
+
+    Returns:
+    Texto HTML con totales y detalle por aula, o una explicaci?n del error de consulta.
+    """
     try:
         conn = get_db()
         with conn.cursor() as cur:
@@ -10551,7 +12599,11 @@ def _tg_reporte_diario_consolidado() -> str:
 
 
 def _tg_reporte_semanal() -> str:
-    """Resumen semanal (viernes 18:00) — últimas 7 jornadas."""
+    """Genera el reporte de asistencia y firmas de los ?ltimos siete d?as.
+
+    Returns:
+    Texto HTML con totales semanales y los cinco docentes con m?s firmas, o un mensaje de error.
+    """
     try:
         conn = get_db()
         with conn.cursor() as cur:
@@ -10590,7 +12642,11 @@ def _tg_reporte_semanal() -> str:
 
 
 def _tg_reporte_mensual() -> str:
-    """Resumen mensual (último día del mes 23:30)."""
+    """Genera el resumen de minutas del mes hasta la fecha actual.
+
+    Returns:
+    Texto HTML con asistencia total y hasta cinco aulas m?s activas, o un mensaje de error.
+    """
     try:
         hoy = date.today()
         primer = hoy.replace(day=1)
@@ -10627,7 +12683,14 @@ def _tg_reporte_mensual() -> str:
 
 
 def _tg_alerta_minuta_tardia(turno: str) -> str:
-    """Si pasada cierta hora un Bedel no entregó la minuta del turno."""
+    """Busca aulas con cronograma del turno indicado que a?n no tienen minuta hoy.
+
+    Args:
+    turno: C?digo de turno utilizado en el cronograma y en las minutas.
+
+    Returns:
+    Texto HTML con aulas pendientes, cadena vac?a si no hay pendientes o mensaje de error.
+    """
     try:
         conn = get_db()
         with conn.cursor() as cur:
@@ -10657,7 +12720,11 @@ def _tg_alerta_minuta_tardia(turno: str) -> str:
 
 
 def _tg_alerta_docentes_no_firmaron() -> str:
-    """Detecta clases que terminaron hace más de N minutos y el docente no firmó."""
+    """Detecta clases recientes cuyo docente todav?a no registr? la firma.
+
+    Returns:
+    Texto HTML con hasta quince casos dentro de la ventana configurable, cadena vac?a si no hay casos o mensaje de error.
+    """
     try:
         # Tolerancia configurable (default 10 min)
         p = _cargar_params()
@@ -10721,7 +12788,11 @@ def _tg_alerta_docentes_no_firmaron() -> str:
 
 
 def _tg_alerta_ausentismo_recurrente() -> str:
-    """Docentes con 3+ clases sin firmar en últimos 7 días."""
+    """Resume docentes con al menos tres clases semanales sin firma.
+
+    Returns:
+    Texto HTML con los docentes detectados, cadena vac?a si no hay casos o mensaje de error.
+    """
     try:
         conn = get_db()
         with conn.cursor() as cur:
@@ -10762,7 +12833,11 @@ def _tg_alerta_ausentismo_recurrente() -> str:
 
 
 def _tg_pins_del_dia() -> str:
-    """PINs operativos del día por aula (06:00)."""
+    """Prepara el reporte diario de PIN operativos por aula y turno.
+
+    Returns:
+    Texto HTML con los PIN del d?a y sus sobrescrituras, o un mensaje de error.
+    """
     try:
         conn = get_db()
         with conn.cursor() as cur:
@@ -10810,7 +12885,11 @@ def _tg_pins_del_dia() -> str:
 
 
 def _tg_justif_pendientes() -> str:
-    """Resumen de justificaciones pendientes (09:00)."""
+    """Resume las justificaciones de ausencia que esperan revisi?n.
+
+    Returns:
+    Texto HTML con cantidad y antig?edad de pendientes, cadena vac?a si no hay ninguna o mensaje de error.
+    """
     try:
         conn = get_db()
         with conn.cursor() as cur:
@@ -10836,7 +12915,11 @@ def _tg_justif_pendientes() -> str:
 
 
 def _tg_status_diario() -> str:
-    """Status del sistema cada mañana (07:30)."""
+    """Genera un resumen de salud del sistema para el reporte matutino.
+
+    Returns:
+    Texto HTML con totales de minutas y firmas y espacio libre disponible, cuando puede consultarse.
+    """
     try:
         conn = get_db()
         with conn.cursor() as cur:
@@ -10870,10 +12953,15 @@ def _tg_status_diario() -> str:
 
 
 def _tg_check_login_sospechoso() -> None:
-    """Se llama desde el endpoint de login fallido. Throttle: 1 alerta cada 30 min."""
+    """Env?a una alerta ante una concentraci?n reciente de intentos fallidos de acceso.
+
+    Returns:
+    None. Solo consulta y notifica si la alerta est? activa, hay cinco o m?s fallos recientes y venci? el intervalo antirrepetici?n.
+    """
     global _LAST_TG_LOGIN_SOSP_AT
     if not _tg_alert_activa('telegram_alert_login_sospechoso'):
         return
+    # El intervalo de espera evita que una r?faga de intentos fallidos convierta la alerta en spam.
     ahora = datetime.now()
     if _LAST_TG_LOGIN_SOSP_AT and (ahora - _LAST_TG_LOGIN_SOSP_AT).total_seconds() < 1800:
         return
@@ -10904,7 +12992,14 @@ def _tg_check_login_sospechoso() -> None:
 
 
 def _tg_check_baja_asistencia(minuta: dict) -> None:
-    """Se llama desde guardar_minuta. Alerta si presentes/FE < 70%."""
+    """Notifica cuando una minuta registra asistencia inferior al setenta por ciento.
+
+    Args:
+    minuta: Datos de aula, turno, fecha, Bedel, presentes y fuerza efectiva.
+
+    Returns:
+    None. Env?a el aviso solo si la alerta est? activa y hay denominador v?lido.
+    """
     if not _tg_alert_activa('telegram_alert_baja_asistencia'):
         return
     fe = (minuta.get('fe') or 0)
@@ -10925,7 +13020,15 @@ def _tg_check_baja_asistencia(minuta: dict) -> None:
 
 
 def _tg_aviso_backup(ok: bool, detalle: str = '') -> None:
-    """Llamada desde el scheduler tras backup automático."""
+    """Notifica al grupo si el respaldo autom?tico termin? o fall?.
+
+    Args:
+    ok: Indica si el respaldo se complet? correctamente.
+    detalle: Informaci?n adicional o causa del fallo.
+
+    Returns:
+    None. No env?a nada si la alerta de respaldo est? desactivada.
+    """
     if not _tg_alert_activa('telegram_alert_backup'):
         return
     if ok:
@@ -10945,8 +13048,20 @@ def _tg_aviso_backup(ok: bool, detalle: str = '') -> None:
 
 
 def _tg_notificar_justificacion_nueva(justif_id, docente, aula, turno, fecha, motivo, coment):
-    """Push al grupo cuando un docente envía una nueva justificación.
-    Incluye botones inline [✅ Aprobar] [❌ Rechazar]."""
+    """Notifica al grupo una nueva justificaci?n pendiente con botones de decisi?n.
+
+    Args:
+    justif_id: Identificador de la justificaci?n.
+    docente: Nombre del docente.
+    aula: Aula asociada.
+    turno: Turno de la clase.
+    fecha: Fecha de la ausencia.
+    motivo: Motivo informado.
+    coment: Comentario adicional, si existe.
+
+    Returns:
+    None. Omite el env?o si Telegram no est? configurado o ocurre un error.
+    """
     try:
         cfg = _telegram_config_actual()
         if not cfg:
@@ -10972,7 +13087,16 @@ def _tg_notificar_justificacion_nueva(justif_id, docente, aula, turno, fecha, mo
 
 
 def _aplicar_decision_justif(justif_id: int, decision: str) -> str:
-    """Aplica aprobar/rechazar a una justificación. decision: 'aprobada' o 'rechazada'."""
+    """Aplica y registra la aprobaci?n o el rechazo de una justificaci?n.
+
+    Args:
+    justif_id: Identificador del registro que se actualizar?.
+    decision: Estado permitido, aprobada o rechazada.
+
+    Returns:
+    Texto HTML con el resultado o el motivo por el que no pudo aplicarse.
+    """
+    # Limitar la decisi?n a estos dos estados evita persistir valores arbitrarios en la justificaci?n.
     if decision not in ('aprobada', 'rechazada'):
         return "❌ Decisión inválida."
     try:
@@ -11006,7 +13130,16 @@ def _aplicar_decision_justif(justif_id: int, decision: str) -> str:
 
 
 def _tg_aviso_cronograma_subido(usuario: str, aulas_afect: int, bloques: int) -> None:
-    """Llamada cuando alguien sube un cronograma desde TIC."""
+    """Notifica la publicaci?n de un cronograma cuando la alerta est? activa.
+
+    Args:
+    usuario: Persona que realiz? la carga.
+    aulas_afect: Cantidad de aulas modificadas.
+    bloques: Cantidad de bloques cargados.
+
+    Returns:
+    None.
+    """
     if not _tg_alert_activa('telegram_alert_cronograma'):
         return
     texto = (
@@ -11021,7 +13154,16 @@ def _tg_aviso_cronograma_subido(usuario: str, aulas_afect: int, bloques: int) ->
 
 
 def _telegram_get_updates(token: str, offset: int = 0, timeout: int = 25) -> list:
-    """Long-polling: pide updates al bot. Retorna lista (vacía si no hay)."""
+    """Obtiene actualizaciones del bot mediante long polling de Telegram.
+
+    Args:
+    token: Credencial del bot.
+    offset: Identificador desde el que se solicitan actualizaciones.
+    timeout: Duraci?n del long polling en segundos.
+
+    Returns:
+    Lista de actualizaciones; devuelve una lista vac?a ante respuesta fallida o error transitorio.
+    """
     url = f"https://api.telegram.org/bot{token}/getUpdates"
     payload = {
         'offset': offset, 'timeout': timeout,
@@ -11043,8 +13185,17 @@ def _telegram_get_updates(token: str, offset: int = 0, timeout: int = 25) -> lis
 
 
 def _bot_responder(token: str, chat_id, texto: str, reply_to_msg_id=None, botones=None):
-    """Envía respuesta del bot. Acepta reply_to y botones inline opcionales.
-    botones: lista de listas, donde cada botón es {'text': str, 'callback_data': str}
+    """Env?a una respuesta del bot con opciones de respuesta y botones opcionales.
+
+    Args:
+    token: Credencial del bot.
+    chat_id: Identificador del chat.
+    texto: Mensaje HTML, limitado al m?ximo de Telegram.
+    reply_to_msg_id: Mensaje al que se responde, si corresponde.
+    botones: Teclado inline opcional.
+
+    Returns:
+    None. Ignora errores de transporte para no interrumpir el procesamiento del bot.
     """
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     payload = {
@@ -11066,7 +13217,18 @@ def _bot_responder(token: str, chat_id, texto: str, reply_to_msg_id=None, botone
 
 
 def _bot_editar(token: str, chat_id, message_id: int, texto: str, botones=None):
-    """Edita un mensaje existente del bot (para actualizar menús sin spam)."""
+    """Edita un mensaje existente y opcionalmente actualiza sus botones.
+
+    Args:
+    token: Credencial del bot.
+    chat_id: Identificador del chat.
+    message_id: Identificador del mensaje a editar.
+    texto: Nuevo texto HTML.
+    botones: Teclado inline opcional.
+
+    Returns:
+    None. Ignora errores de transporte.
+    """
     url = f"https://api.telegram.org/bot{token}/editMessageText"
     payload = {
         'chat_id': str(chat_id),
@@ -11086,7 +13248,16 @@ def _bot_editar(token: str, chat_id, message_id: int, texto: str, botones=None):
 
 
 def _bot_answer_callback(token: str, callback_id: str, texto: str = ''):
-    """Confirma un callback (quita el spinner en el botón)."""
+    """Confirma una pulsaci?n de bot?n al servicio de Telegram.
+
+    Args:
+    token: Credencial del bot.
+    callback_id: Identificador de la consulta callback.
+    texto: Confirmaci?n breve opcional.
+
+    Returns:
+    None. Ignora errores de transporte.
+    """
     url = f"https://api.telegram.org/bot{token}/answerCallbackQuery"
     payload = {'callback_query_id': callback_id, 'text': texto[:200]}
     data = _urlparse.urlencode(payload).encode('utf-8')
@@ -11100,10 +13271,13 @@ def _bot_answer_callback(token: str, callback_id: str, texto: str = ''):
 # ─── HELPERS VISUALES ─────────────────────────────────────────────────────
 
 def _tg_esc(s) -> str:
-    """Escapa caracteres especiales de HTML para que Telegram no rompa el parseo.
-    Telegram parse_mode='HTML' falla si hay `<`, `>` o `&` sueltos en el texto.
-    Usar SIEMPRE sobre strings que vienen de la DB o del usuario antes de meterlos
-    dentro de tags como <b>...</b>, <i>...</i>, <code>...</code>.
+    """Escapa los caracteres que pueden invalidar el HTML enviado a Telegram.
+
+    Args:
+    s: Valor din?mico que se insertar? en el mensaje.
+
+    Returns:
+    Cadena segura para texto HTML, o cadena vac?a si el valor es None.
     """
     if s is None:
         return ''
@@ -11114,23 +13288,47 @@ def _tg_esc(s) -> str:
 
 
 def _sparkline(valores: list, ancho: int = 8) -> str:
-    """Genera mini-gráfico ASCII tipo ▁▃▅▇█."""
+    """Convierte valores num?ricos en una l?nea de caracteres tipo sparkline.
+
+    Args:
+    valores: Secuencia de valores que se representar?.
+    ancho: Cantidad m?xima de valores incluidos.
+
+    Returns:
+    Cadena gr?fica normalizada o cadena vac?a si no hay valores.
+    """
     if not valores: return ''
     bloques = '▁▂▃▄▅▆▇█'
     mn = min(valores); mx = max(valores)
+    # El valor de respaldo mantiene definida la escala cuando todos los datos son iguales y evita dividir por cero.
     rng = mx - mn or 1
     return ''.join(bloques[min(7, max(0, int((v - mn) / rng * 7)))] for v in valores[:ancho])
 
 
 def _barra_progreso(porcentaje: float, ancho: int = 10) -> str:
-    """Barra de progreso ASCII: ████████░░ 80%"""
+    """Construye una barra visual para un porcentaje limitado al rango de cero a cien.
+
+    Args:
+    porcentaje: Valor porcentual que se representar?.
+    ancho: Cantidad de posiciones de la barra.
+
+    Returns:
+    Cadena con segmentos llenos, vac?os y porcentaje redondeado.
+    """
     porcentaje = max(0, min(100, porcentaje))
     llenos = int(porcentaje / 100 * ancho)
     return '█' * llenos + '░' * (ancho - llenos) + f' {porcentaje:.0f}%'
 
 
 def _icono_asistencia(pct: float) -> str:
-    """Devuelve emoji según porcentaje de asistencia."""
+    """Selecciona un indicador visual seg?n el porcentaje de asistencia.
+
+    Args:
+    pct: Porcentaje de asistencia.
+
+    Returns:
+    Emoji de estado correspondiente al umbral alcanzado.
+    """
     if pct >= 90:  return '🟢'
     if pct >= 75:  return '🟡'
     if pct >= 60:  return '🟠'
@@ -11138,7 +13336,11 @@ def _icono_asistencia(pct: float) -> str:
 
 
 def _menu_principal_botones() -> list:
-    """Layout de botones del menú principal (expandido con todas las funciones)."""
+    """Define las filas de botones del men? interactivo principal.
+
+    Returns:
+    Lista de filas con etiquetas y datos callback para cada opci?n.
+    """
     return [
         [{'text': '📊 Hoy',         'callback_data': 'cmd:hoy'},
          {'text': '❌ Ausentes',    'callback_data': 'cmd:ausentes'}],
@@ -11156,6 +13358,11 @@ def _menu_principal_botones() -> list:
 
 
 def _cmd_ayuda() -> str:
+    """Devuelve el manual de comandos y funciones del bot.
+
+    Returns:
+    Texto HTML con instrucciones, ejemplos y recomendaciones de uso.
+    """
     return (
         "🤖 <b>S.I.P.A. BOT — Manual de uso</b>\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -11245,7 +13452,11 @@ def _cmd_ayuda() -> str:
 
 
 def _cmd_menu() -> tuple:
-    """Menú principal con botones interactivos. Retorna (texto, botones)."""
+    """Construye el men? principal del bot con fecha y botones interactivos.
+
+    Returns:
+    Tupla con el texto del men? y la lista de botones principales.
+    """
     fecha = datetime.now().strftime('%A %d/%m/%Y · %H:%M').capitalize()
     texto = (
         "🤖 <b>S.I.P.A. — Menú Principal</b>\n"
@@ -11270,7 +13481,11 @@ def _cmd_menu() -> tuple:
 
 
 def _cmd_estado() -> str:
-    """Estado general del sistema (visual y didáctico)."""
+    """Consulta y presenta un resumen del estado operativo del sistema.
+
+    Returns:
+    Texto HTML con servicios, actividad del d?a, recursos cargados y espacio en disco.
+    """
     try:
         conn = get_db()
         with conn.cursor() as cur:
@@ -11323,7 +13538,11 @@ def _cmd_estado() -> str:
 
 
 def _cmd_hoy() -> str:
-    """Resumen de minutas del día (con gráficos ASCII)."""
+    """Resume las minutas de hoy y calcula la asistencia global y por aula.
+
+    Returns:
+    Texto HTML con totales, porcentajes y estado visual de cada aula.
+    """
     try:
         conn = get_db()
         with conn.cursor() as cur:
@@ -11362,7 +13581,11 @@ def _cmd_hoy() -> str:
 
 
 def _cmd_semana() -> str:
-    """Reporte semanal on-demand con sparkline de asistencia diaria."""
+    """Genera el reporte de asistencia y firmas de los ?ltimos siete d?as.
+
+    Returns:
+    Texto HTML con acumulados, tendencia diaria y hasta cinco docentes con m?s firmas.
+    """
     try:
         conn = get_db()
         with conn.cursor() as cur:
@@ -11414,7 +13637,11 @@ def _cmd_semana() -> str:
 
 
 def _cmd_mes() -> str:
-    """Reporte mensual on-demand."""
+    """Genera el reporte de asistencia del mes en curso y sus aulas destacadas.
+
+    Returns:
+    Texto HTML con totales mensuales, porcentaje de asistencia y hasta cinco aulas activas.
+    """
     try:
         hoy = date.today()
         primer = hoy.replace(day=1)
@@ -11457,7 +13684,14 @@ def _cmd_mes() -> str:
 
 
 def _cmd_buscar(arg: str) -> str:
-    """Búsqueda fuzzy de docentes por apellido."""
+    """Busca coincidencias parciales de docentes registrados y del cronograma.
+
+    Args:
+    arg: Texto de b?squeda; requiere al menos dos caracteres.
+
+    Returns:
+    Texto HTML con coincidencias o indicaci?n de uso, ausencia de resultados o error.
+    """
     q = arg.strip().upper()
     if len(q) < 2:
         return "❓ Uso: <code>/buscar APELLIDO</code>  (mínimo 2 caracteres)"
@@ -11496,7 +13730,11 @@ def _cmd_buscar(arg: str) -> str:
 
 
 def _cmd_bedeles() -> str:
-    """Bedeles asignados a las minutas de hoy."""
+    """Lista los Bedeles y subbedeles consignados en las minutas de hoy.
+
+    Returns:
+    Texto HTML ordenado por aula y turno, o aviso si todav?a no hay minutas.
+    """
     try:
         conn = get_db()
         with conn.cursor() as cur:
@@ -11521,7 +13759,14 @@ def _cmd_bedeles() -> str:
 
 
 def _cmd_historial(arg: str) -> str:
-    """Historial de las últimas 10 minutas de un aula."""
+    """Muestra las ?ltimas diez minutas registradas para un aula.
+
+    Args:
+    arg: Texto con el aula que se desea consultar.
+
+    Returns:
+    Texto HTML con fechas, asistencia y tendencia, o indicaci?n de uso o error.
+    """
     partes = arg.strip().upper().split()
     if not partes:
         return "❓ Uso: <code>/historial AULA</code>  (ej: <code>/historial 25</code>)"
@@ -11554,7 +13799,14 @@ def _cmd_historial(arg: str) -> str:
 
 
 def _cmd_docente(arg: str) -> str:
-    """Perfil completo de un docente: firmas, ausencias, materias, aulas."""
+    """Construye el perfil de un docente usando registros, firmas y justificaciones.
+
+    Args:
+    arg: Nombre o apellido parcial de al menos dos caracteres.
+
+    Returns:
+    Texto HTML con datos registrados, historial de firmas, justificaciones y aulas frecuentes.
+    """
     q = arg.strip().upper()
     if len(q) < 2:
         return "❓ Uso: <code>/docente APELLIDO</code>  (mínimo 2 caracteres)"
@@ -11627,7 +13879,14 @@ def _cmd_docente(arg: str) -> str:
 
 
 def _cmd_cronograma(arg: str) -> str:
-    """Cronograma semanal de un aula. Uso: /cronograma 25 TM"""
+    """Presenta el cronograma semanal de un aula y turno.
+
+    Args:
+    arg: Aula y turno opcional; el turno predeterminado es TM.
+
+    Returns:
+    Texto HTML agrupado por d?a, o aviso de uso, ausencia de cronograma o error.
+    """
     partes = arg.strip().upper().split()
     if not partes:
         return "❓ Uso: <code>/cronograma AULA TURNO</code>  (ej: <code>/cronograma 25 TM</code>)"
@@ -11679,7 +13938,11 @@ def _cmd_cronograma(arg: str) -> str:
 
 
 def _cmd_ranking() -> str:
-    """Ranking de docentes con más firmas + aulas más activas (últimos 30 días)."""
+    """Genera un ranking de firmas docentes y asistencia por aula de los ?ltimos treinta d?as.
+
+    Returns:
+    Texto HTML con hasta diez docentes y diez aulas ordenados por actividad.
+    """
     try:
         conn = get_db()
         with conn.cursor() as cur:
@@ -11715,7 +13978,11 @@ def _cmd_ranking() -> str:
 
 
 def _cmd_cobertura() -> str:
-    """Cobertura semanal por aula: firmas registradas / clases programadas."""
+    """Compara las firmas recientes con los bloques registrados por aula y turno.
+
+    Returns:
+    Texto HTML con la cobertura semanal estimada o aviso de que falta cronograma.
+    """
     try:
         conn = get_db()
         with conn.cursor() as cur:
@@ -11756,7 +14023,11 @@ def _cmd_cobertura() -> str:
 
 
 def _cmd_auditoria() -> str:
-    """Últimas 10 acciones del audit_log."""
+    """Muestra las diez acciones m?s recientes del registro de auditor?a.
+
+    Returns:
+    Texto HTML con fecha, usuario, rol y detalle, o aviso si no hay acciones.
+    """
     try:
         conn = get_db()
         with conn.cursor() as cur:
@@ -11783,8 +14054,14 @@ def _cmd_auditoria() -> str:
 
 
 def _cmd_notif(arg: str) -> str:
-    """Envía un aviso personalizado al grupo desde el bot.
-    Permite agregar emojis, anuncios, recordatorios."""
+    """Prepara un aviso personalizado para su publicaci?n en el grupo.
+
+    Args:
+    arg: Texto del anuncio, de al menos tres caracteres.
+
+    Returns:
+    Mensaje HTML escapado y acotado, o instrucciones de uso.
+    """
     texto = arg.strip()
     if len(texto) < 3:
         return "❓ Uso: <code>/notif TEXTO</code>\n\nEj: <code>/notif Mañana es feriado, no hay clases.</code>"
@@ -11797,7 +14074,11 @@ def _cmd_notif(arg: str) -> str:
 
 
 def _cmd_silenciar() -> str:
-    """Desactiva TODAS las alertas automáticas con un solo comando."""
+    """Desactiva todas las opciones de alertas autom?ticas de Telegram.
+
+    Returns:
+    Texto HTML de confirmaci?n o mensaje de error; no desactiva el bot ni el env?o de minutas.
+    """
     alert_keys = [
         'telegram_alert_resumen_diario',
         'telegram_alert_minutas_tardias',
@@ -11832,7 +14113,11 @@ def _cmd_silenciar() -> str:
 
 
 def _cmd_activar() -> str:
-    """Reactiva las alertas más importantes (no todas — algunas son ruidosas)."""
+    """Reactiva el conjunto esencial de alertas autom?ticas.
+
+    Returns:
+    Texto HTML que identifica las alertas reactivadas o mensaje de error.
+    """
     # Reactivamos las MÁS ÚTILES por defecto
     alert_keys_basicas = [
         'telegram_alert_resumen_diario',
@@ -11869,7 +14154,14 @@ def _cmd_activar() -> str:
 # ─── BOT PRIVADO PARA BEDELES (BLOQUE 3) ───────────────────────────────────
 
 def _bedel_telegram_buscar(tg_user_id) -> dict | None:
-    """Devuelve {aula, turno} si el Telegram user_id está vinculado, o None."""
+    """Busca la vinculaci?n activa de un usuario de Telegram con Bedel?a.
+
+    Args:
+    tg_user_id: Identificador num?rico del usuario de Telegram.
+
+    Returns:
+    Diccionario con aula, turno y nombre si est? habilitado y vinculado; None en otro caso.
+    """
     if not tg_user_id or not _telegram_bedel_habilitado():
         return None
     try:
@@ -11895,8 +14187,11 @@ def _bedel_telegram_buscar(tg_user_id) -> dict | None:
 
 
 def _asegurar_tablas_bedel_telegram():
-    """Crea las tablas del Bloque 3 si no existen. Idempotente.
-    Se llama justo antes de generar un código, así no requiere reiniciar Flask."""
+    """Crea de forma repetible las tablas requeridas por la integraci?n de Bedel?a.
+
+    Returns:
+    True si las tablas est?n disponibles; False si la operaci?n falla.
+    """
     try:
         conn = get_db()
         with conn.cursor() as cur:
@@ -11936,13 +14231,22 @@ def _asegurar_tablas_bedel_telegram():
 
 
 def _bedel_generar_codigo_vinculacion(tg_user_id, tg_username, tg_nombre) -> tuple:
-    """Genera código de 6 dígitos válido por 10 min para vincular un Bedel.
-    Retorna (codigo, mensaje_error). Si codigo='', el segundo elemento explica por qué."""
+    """Genera un c?digo temporal para iniciar la vinculaci?n de un Bedel.
+
+    Args:
+    tg_user_id: Identificador num?rico de Telegram.
+    tg_username: Nombre de usuario de Telegram.
+    tg_nombre: Nombre visible del usuario.
+
+    Returns:
+    Tupla con c?digo de seis d?gitos y mensaje de error; el c?digo vence en diez minutos.
+    """
     if not _telegram_bedel_habilitado():
         return ('', 'La integración de Telegram para Bedelía está desactivada por TIC.')
     # Asegurar que las tablas existen (idempotente, por si Flask no se reinició)
     if not _asegurar_tablas_bedel_telegram():
         return ('', 'No se pudieron crear las tablas. Revisá los permisos de la DB.')
+    # El generador criptogr?fico hace que el c?digo de vinculaci?n sea dif?cil de adivinar antes de que venza.
     codigo = f"{secrets.randbelow(1000000):06d}"
     expira = datetime.now() + timedelta(minutes=10)
     try:
@@ -11964,8 +14268,16 @@ def _bedel_generar_codigo_vinculacion(tg_user_id, tg_username, tg_nombre) -> tup
 
 
 def _bedel_consumir_codigo(codigo: str, aula: str, turno: str) -> tuple:
-    """Consume un código de vinculación desde el Portal Bedel.
-    Retorna (ok, mensaje, tg_user_id_o_None)."""
+    """Valida y consume el c?digo usado para vincular un Bedel con un aula.
+
+    Args:
+    codigo: C?digo de vinculaci?n recibido.
+    aula: Aula que quedar? asociada.
+    turno: Turno que quedar? asociado.
+
+    Returns:
+    Tupla con ?xito, mensaje y usuario de Telegram vinculado, o None si no se complet?.
+    """
     if not _telegram_bedel_habilitado():
         return (False, 'La integración de Telegram para Bedelía está desactivada por TIC.', None)
     try:
@@ -12003,7 +14315,16 @@ def _bedel_consumir_codigo(codigo: str, aula: str, turno: str) -> tuple:
 
 
 def _bedel_generar_token_login(tg_user_id, aula: str, turno: str) -> str:
-    """Genera un token de single-sign-on válido por 5 minutos."""
+    """Crea un token temporal de inicio de sesi?n para el portal de Bedel?a.
+
+    Args:
+    tg_user_id: Identificador num?rico del usuario de Telegram.
+    aula: Aula autorizada para la sesi?n.
+    turno: Turno autorizado para la sesi?n.
+
+    Returns:
+    Token de acceso de un solo uso con vigencia de cinco minutos, o cadena vac?a si falla.
+    """
     if not _telegram_bedel_habilitado():
         return ''
     tok = secrets.token_urlsafe(24)
@@ -12025,7 +14346,16 @@ def _bedel_generar_token_login(tg_user_id, aula: str, turno: str) -> str:
 # ─── Comandos del bot para Bedeles vinculados ────────────────────────────
 
 def _cmd_bedel_start(tg_user_id, tg_username, tg_nombre) -> tuple:
-    """Comando /start o /vincular en chat privado: arranca flujo de vinculación."""
+    """Atiende el inicio o la vinculaci?n de un Bedel desde el chat privado.
+
+    Args:
+    tg_user_id: Identificador num?rico del usuario de Telegram.
+    tg_username: Nombre de usuario de Telegram.
+    tg_nombre: Nombre visible del usuario.
+
+    Returns:
+    Tupla con mensaje HTML y teclado opcional para continuar la vinculaci?n.
+    """
     # Si ya está vinculado, le mostramos su info
     info = _bedel_telegram_buscar(tg_user_id)
     if info:
@@ -12062,6 +14392,14 @@ def _cmd_bedel_start(tg_user_id, tg_username, tg_nombre) -> tuple:
 
 
 def _cmd_bedel_mi_pin(tg_user_id) -> tuple:
+    """Muestra al Bedel vinculado el PIN operativo de su aula para hoy.
+
+    Args:
+    tg_user_id: Identificador num?rico del usuario de Telegram.
+
+    Returns:
+    Tupla con mensaje HTML que incluye el PIN y teclado opcional; informa si falta vinculaci?n.
+    """
     info = _bedel_telegram_buscar(tg_user_id)
     if not info:
         return ("⚠️ No estás vinculado. Mandá <code>/start</code> primero.", None)
@@ -12080,6 +14418,14 @@ def _cmd_bedel_mi_pin(tg_user_id) -> tuple:
 
 
 def _cmd_bedel_mi_aula(tg_user_id) -> tuple:
+    """Muestra al Bedel vinculado el resumen de su aula: última minuta y firmas de hoy.
+
+    Args:
+        tg_user_id: ID de usuario de Telegram del solicitante.
+
+    Returns:
+        Tupla (texto HTML, botones). Botones es siempre None; si no está vinculado devuelve un aviso.
+    """
     info = _bedel_telegram_buscar(tg_user_id)
     if not info:
         return ("⚠️ No estás vinculado. Mandá <code>/start</code> primero.", None)
@@ -12127,6 +14473,14 @@ def _cmd_bedel_mi_aula(tg_user_id) -> tuple:
 
 
 def _cmd_bedel_mi_padron(tg_user_id) -> tuple:
+    """Lista el padrón de aspirantes del aula y turno del Bedel vinculado (máx. 60 filas).
+
+    Args:
+        tg_user_id: ID de usuario de Telegram del solicitante.
+
+    Returns:
+        Tupla (texto HTML, None).
+    """
     info = _bedel_telegram_buscar(tg_user_id)
     if not info:
         return ("⚠️ No estás vinculado. Mandá <code>/start</code> primero.", None)
@@ -12158,6 +14512,14 @@ def _cmd_bedel_mi_padron(tg_user_id) -> tuple:
 
 
 def _cmd_bedel_mi_cronograma(tg_user_id) -> tuple:
+    """Devuelve el cronograma del aula y turno del Bedel vinculado reutilizando el comando general de cronograma.
+
+    Args:
+        tg_user_id: ID de usuario de Telegram del solicitante.
+
+    Returns:
+        Tupla (texto HTML, None).
+    """
     info = _bedel_telegram_buscar(tg_user_id)
     if not info:
         return ("⚠️ No estás vinculado. Mandá <code>/start</code> primero.", None)
@@ -12167,7 +14529,14 @@ def _cmd_bedel_mi_cronograma(tg_user_id) -> tuple:
 
 
 def _cmd_bedel_link_pc(tg_user_id) -> tuple:
-    """Genera un token de un solo uso para login automático en PC/celular."""
+    """Genera un enlace de login de un solo uso para que el Bedel entre desde PC o celular.
+
+    Args:
+        tg_user_id: ID de usuario de Telegram del Bedel.
+
+    Returns:
+        Tupla (texto HTML con el enlace y su vencimiento, None). Informa si la integración está desactivada o el usuario no está vinculado.
+    """
     if not _telegram_bedel_habilitado():
         return (
             "🔒 <b>Acceso por Telegram desactivado</b>\n\n"
@@ -12198,7 +14567,14 @@ def _cmd_bedel_link_pc(tg_user_id) -> tuple:
 
 
 def _cmd_bedel_desvincular(tg_user_id) -> tuple:
-    """Desvincula la cuenta de Telegram del Bedel."""
+    """Desvincula la cuenta de Telegram del Bedel marcándola como inactiva.
+
+    Args:
+        tg_user_id: ID de usuario de Telegram del Bedel.
+
+    Returns:
+        Tupla (texto HTML de confirmación o error, None).
+    """
     try:
         conn = get_db()
         with conn.cursor() as cur:
@@ -12225,7 +14601,11 @@ def _cmd_bedel_desvincular(tg_user_id) -> tuple:
 # ─── HERRAMIENTAS TIC (BLOQUE 4) ────────────────────────────────────────────
 
 def _asegurar_tablas_bloque4():
-    """Crea tablas del bloque 4 si no existen (idempotente)."""
+    """Crea las tablas del bloque 4 del bot (recordatorios y log de comandos) si no existen.
+
+    Returns:
+        True si se crearon o ya existían; False ante cualquier error.
+    """
     try:
         conn = get_db()
         with conn.cursor() as cur:
@@ -12260,7 +14640,19 @@ def _asegurar_tablas_bloque4():
 
 
 def _log_bot_comando(comando, tg_user_id, chat_id, es_privado, ok=True, error=None):
-    """Registra cada comando ejecutado para estadísticas."""
+    """Registra en bot_comando_log un comando ejecutado para las estadísticas del bot.
+
+    Args:
+        comando: Nombre del comando (se trunca a 60 caracteres).
+        tg_user_id: ID de usuario de Telegram.
+        chat_id: ID del chat donde se ejecutó.
+        es_privado: True si fue en chat privado.
+        ok: True si el comando terminó bien.
+        error: Mensaje de error opcional (se trunca a 500 caracteres).
+
+    Returns:
+        None. Cualquier fallo de BD se ignora para no afectar al bot.
+    """
     try:
         conn = get_db()
         with conn.cursor() as cur:
@@ -12277,7 +14669,11 @@ def _log_bot_comando(comando, tg_user_id, chat_id, es_privado, ok=True, error=No
 
 
 def _cmd_ping() -> str:
-    """Test rápido: latencia DB + estado del bot."""
+    """Comando /ping: mide la latencia de la base de datos y el estado de los servicios.
+
+    Returns:
+        Texto HTML con latencia en ms y hora actual, o mensaje de error.
+    """
     try:
         t0 = _time_mod.perf_counter()
         conn = get_db()
@@ -12300,7 +14696,14 @@ def _cmd_ping() -> str:
 
 
 def _cmd_logs(arg: str) -> str:
-    """Últimos N logs del system_log. Default: nivel=ERROR, N=5."""
+    """Comando /logs: muestra las últimas entradas de system_log.
+
+    Args:
+        arg: Texto opcional con nivel (INFO, WARN, WARNING, ERROR) y cantidad N (máx. 20). Por defecto ERROR y 5.
+
+    Returns:
+        Texto HTML con los logs encontrados.
+    """
     partes = arg.strip().upper().split()
     nivel = 'ERROR'
     n = 5
@@ -12337,7 +14740,11 @@ def _cmd_logs(arg: str) -> str:
 
 
 def _cmd_stats_bot() -> str:
-    """Estadísticas de uso del bot (últimos 7 días)."""
+    """Comando /stats_bot: estadísticas de uso del bot en los últimos 7 días.
+
+    Returns:
+        Texto HTML con totales, exitosos, errores, usuarios activos, comandos de hoy y top 5 de comandos.
+    """
     try:
         _asegurar_tablas_bloque4()
         conn = get_db()
@@ -12385,7 +14792,14 @@ def _cmd_stats_bot() -> str:
 
 
 def _cmd_dni(arg: str) -> str:
-    """Búsqueda por DNI exacto."""
+    """Comando /dni: busca un docente por DNI exacto.
+
+    Args:
+        arg: DNI numérico de al menos 7 dígitos.
+
+    Returns:
+        Texto HTML con nombre, email y fecha de alta, o aviso si no existe o el formato es inválido.
+    """
     dni = arg.strip()
     if not dni.isdigit() or len(dni) < 7:
         return "❓ Uso: <code>/dni 12345678</code>"
@@ -12415,7 +14829,14 @@ def _cmd_dni(arg: str) -> str:
 
 
 def _cmd_dia(arg: str) -> str:
-    """Resumen de un día específico. Formato: DD/MM/AAAA o YYYY-MM-DD."""
+    """Comando /dia: resumen de minutas y firmas de una fecha puntual.
+
+    Args:
+        arg: Fecha en formato DD/MM/AAAA, YYYY-MM-DD o DD-MM-AAAA.
+
+    Returns:
+        Texto HTML con totales de F.E., presentes, ausentes y detalle por aula.
+    """
     s = arg.strip()
     fecha = None
     for fmt in ('%d/%m/%Y', '%Y-%m-%d', '%d-%m-%Y'):
@@ -12469,7 +14890,14 @@ def _cmd_dia(arg: str) -> str:
 
 
 def _cmd_buscar_novedad(arg: str) -> str:
-    """Busca texto en las novedades de las minutas."""
+    """Comando /buscar_novedad: busca texto en las novedades de las minutas (máx. 10 resultados).
+
+    Args:
+        arg: Texto a buscar, mínimo 3 caracteres.
+
+    Returns:
+        Texto HTML con fecha, aula y un fragmento alrededor de la coincidencia.
+    """
     q = arg.strip()
     if len(q) < 3:
         return "❓ Uso: <code>/buscar_novedad TEXTO</code> (mínimo 3 caracteres)"
@@ -12504,8 +14932,14 @@ def _cmd_buscar_novedad(arg: str) -> str:
 
 
 def _cmd_recordar(arg: str) -> str:
-    """Programa un recordatorio. Formato:
-       /recordar DD/MM HH:MM Texto del recordatorio"""
+    """Comando /recordar: programa un recordatorio para enviarse por Telegram.
+
+    Args:
+        arg: Texto con formato FECHA HORA MENSAJE. La fecha admite hoy, mañana, DD/MM, DD/MM/AAAA o YYYY-MM-DD; la hora HH:MM en 24h.
+
+    Returns:
+        Texto HTML con el ID del recordatorio, o un mensaje de error si la fecha u hora son inválidas o no son futuras.
+    """
     s = arg.strip()
     if not s:
         return (
@@ -12568,7 +15002,11 @@ def _cmd_recordar(arg: str) -> str:
 
 
 def _cmd_recordatorios() -> str:
-    """Lista recordatorios pendientes."""
+    """Comando /recordatorios: lista los próximos 10 recordatorios pendientes.
+
+    Returns:
+        Texto HTML con ID, fecha y mensaje de cada recordatorio.
+    """
     try:
         _asegurar_tablas_bloque4()
         conn = get_db()
@@ -12595,7 +15033,14 @@ def _cmd_recordatorios() -> str:
 
 
 def _cmd_cancelar_recordatorio(arg: str) -> str:
-    """Cancela un recordatorio por ID."""
+    """Comando /cancelar_recordatorio: elimina un recordatorio pendiente por ID.
+
+    Args:
+        arg: ID numérico, con o sin el prefijo #.
+
+    Returns:
+        Texto HTML de confirmación o aviso si no existe un recordatorio pendiente con ese ID.
+    """
     arg = arg.strip().lstrip('#')
     if not arg.isdigit():
         return "❓ Uso: <code>/cancelar_recordatorio N</code>"
@@ -12619,7 +15064,11 @@ def _cmd_cancelar_recordatorio(arg: str) -> str:
 
 
 def _cmd_plantillas() -> tuple:
-    """Lista de plantillas de mensajes frecuentes con botones."""
+    """Comando /plantillas: ofrece plantillas de mensajes frecuentes mediante botones.
+
+    Returns:
+        Tupla (texto HTML, lista de filas de botones inline con callback_data plant:<slug>).
+    """
     texto = (
         "📋 <b>PLANTILLAS DE MENSAJES</b>\n"
         "━━━━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -12652,7 +15101,17 @@ _PLANTILLAS_TEXTOS = {
 
 
 def _cmd_perfil(tg_user_id, tg_username, tg_nombre, chat_type) -> str:
-    """Muestra info del usuario que envió el comando."""
+    """Comando /perfil: muestra los datos del usuario de Telegram que lo ejecutó.
+
+    Args:
+        tg_user_id: ID de usuario de Telegram.
+        tg_username: Username de Telegram, puede estar vacío.
+        tg_nombre: Nombre completo en Telegram.
+        chat_type: Tipo de chat (private, group, supergroup).
+
+    Returns:
+        Texto HTML con rol, contexto, aula vinculada y comandos de los últimos 7 días.
+    """
     try:
         info_bedel = _bedel_telegram_buscar(tg_user_id)
         rol = "🎓 <b>Bedel vinculado</b>" if info_bedel else "👤 Usuario sin vincular"
@@ -12691,8 +15150,19 @@ def _cmd_perfil(tg_user_id, tg_username, tg_nombre, chat_type) -> str:
 # ─── HELPERS DE GRÁFICOS PNG (BLOQUE 2) ────────────────────────────────────
 
 def _bot_enviar_foto(token: str, chat_id, png_bytes: bytes, caption: str = '') -> bool:
-    """Sube una imagen PNG al chat configurado con caption opcional. Usa multipart/form-data."""
+    """Envía una imagen PNG al chat de Telegram usando sendPhoto con multipart/form-data.
+
+    Args:
+        token: Token del bot de Telegram.
+        chat_id: ID del chat destino.
+        png_bytes: Contenido binario de la imagen.
+        caption: Texto opcional en HTML (se trunca a 1024 caracteres).
+
+    Returns:
+        True si Telegram respondió ok; False ante error (se registra en el log del sistema).
+    """
     try:
+        # Multipart armado a mano para no depender de librerías externas; el boundary aleatorio evita colisiones con el contenido del PNG
         boundary = '----SIPA' + secrets.token_hex(8)
         sep = f'--{boundary}\r\n'.encode()
         body = b''
@@ -12715,7 +15185,11 @@ def _bot_enviar_foto(token: str, chat_id, png_bytes: bytes, caption: str = '') -
 
 
 def _matplotlib_setup():
-    """Importa matplotlib en modo headless con configuración consistente."""
+    """Importa matplotlib en modo headless (backend Agg) con un estilo uniforme.
+
+    Returns:
+        El módulo matplotlib.pyplot ya configurado.
+    """
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
@@ -12733,7 +15207,11 @@ def _matplotlib_setup():
 
 
 def _grafico_semana_png() -> bytes:
-    """Gráfico de barras: asistencia por día de la última semana."""
+    """Genera el gráfico de barras apiladas de asistencia diaria de los últimos 7 días.
+
+    Returns:
+        Bytes del PNG resultante.
+    """
     plt = _matplotlib_setup()
     try:
         conn = get_db()
@@ -12777,7 +15255,11 @@ def _grafico_semana_png() -> bytes:
 
 
 def _grafico_aulas_png() -> bytes:
-    """Gráfico horizontal: % asistencia por aula (últimos 30 días)."""
+    """Genera el gráfico horizontal de porcentaje de asistencia por aula de los últimos 30 días.
+
+    Returns:
+        Bytes del PNG resultante, con colores según el porcentaje y umbral del 70 por ciento.
+    """
     plt = _matplotlib_setup()
     conn = get_db()
     with conn.cursor() as cur:
@@ -12817,7 +15299,11 @@ def _grafico_aulas_png() -> bytes:
 
 
 def _grafico_mes_png() -> bytes:
-    """Línea de tendencia diaria de % asistencia del mes."""
+    """Genera la línea de tendencia diaria del porcentaje de asistencia del mes en curso.
+
+    Returns:
+        Bytes del PNG resultante, con umbral del 70 por ciento y promedio.
+    """
     plt = _matplotlib_setup()
     hoy = date.today()
     primer = hoy.replace(day=1)
@@ -12858,8 +15344,14 @@ def _grafico_mes_png() -> bytes:
 
 
 def _cmd_grafico(arg: str) -> tuple:
-    """Genera un gráfico PNG y lo envía como imagen al grupo.
-    Tipos: semana (default), aulas, mes."""
+    """Comando /grafico: genera un gráfico PNG y lo envía al grupo como imagen.
+
+    Args:
+        arg: Tipo de gráfico: semana (por defecto), aulas o mes.
+
+    Returns:
+        Tupla (texto, None). El texto es vacío si la foto se envió correctamente; si no, contiene el error.
+    """
     tipo = (arg.strip().lower() or 'semana')
     if tipo not in ('semana', 'aulas', 'mes'):
         return ("❓ Uso: <code>/grafico TIPO</code>\nTipos: <code>semana</code>, <code>aulas</code>, <code>mes</code>", None)
@@ -12889,7 +15381,14 @@ def _cmd_grafico(arg: str) -> tuple:
 # ─── COMANDOS COMPARATIVAS Y RANKINGS (BLOQUE 2) ──────────────────────────
 
 def _cmd_comparar(arg: str) -> str:
-    """Compara dos aulas lado a lado (últimos 7 días)."""
+    """Comando /comparar: compara dos aulas lado a lado en los últimos 7 días.
+
+    Args:
+        arg: Dos números de aula separados por espacio.
+
+    Returns:
+        Texto HTML con F.E., presentes, ausentes, porcentaje y veredicto.
+    """
     partes = arg.strip().upper().split()
     if len(partes) < 2:
         return "❓ Uso: <code>/comparar AULA1 AULA2</code>\n   Ej: <code>/comparar 25 32</code>"
@@ -12938,7 +15437,11 @@ def _cmd_comparar(arg: str) -> str:
 
 
 def _cmd_vs_mes() -> str:
-    """Compara mes actual con mes anterior."""
+    """Comando /vs_mes: compara el mes actual con el mes anterior.
+
+    Returns:
+        Texto HTML con minutas, F.E., presentes, ausentes, variaciones porcentuales y el docente con más firmas del mes.
+    """
     try:
         hoy = date.today()
         # Mes actual: día 1 → hoy
@@ -12953,6 +15456,15 @@ def _cmd_vs_mes() -> str:
         conn = get_db()
         with conn.cursor() as cur:
             def stats(desde, hasta):
+                """Obtiene los totales de minutas, F.E., presentes y ausentes de un rango de fechas.
+
+                Args:
+                    desde: Fecha inicial inclusive.
+                    hasta: Fecha final inclusive.
+
+                Returns:
+                    Tupla (cantidad de minutas, F.E., presentes, ausentes).
+                """
                 cur.execute("""
                     SELECT COUNT(*), COALESCE(SUM(fe::int),0),
                            COALESCE(SUM(presentes::int),0), COALESCE(SUM(cant_ausentes::int),0)
@@ -12976,6 +15488,15 @@ def _cmd_vs_mes() -> str:
         nm_ant = meses[primer_anterior.month - 1]
 
         def delta(a, b):
+            """Calcula la variación porcentual entre dos valores con una flecha indicadora.
+
+            Args:
+                a: Valor actual.
+                b: Valor de referencia.
+
+            Returns:
+                Tupla (texto con flecha y porcentaje, flecha). Si b es cero devuelve un guion.
+            """
             if not b:
                 return ('—', '')
             d = a - b
@@ -13010,7 +15531,11 @@ def _cmd_vs_mes() -> str:
 
 
 def _cmd_heatmap() -> str:
-    """Mapa de calor por aula — últimos 30 días."""
+    """Comando /heatmap: mapa de calor de asistencia por aula en los últimos 30 días.
+
+    Returns:
+        Texto HTML con las aulas críticas (menos de 70 por ciento) primero y luego el resto.
+    """
     try:
         conn = get_db()
         with conn.cursor() as cur:
@@ -13062,7 +15587,11 @@ def _cmd_heatmap() -> str:
 
 
 def _cmd_faltas_top() -> str:
-    """Top 10 docentes con mayor tasa de ausencias (faltas/programadas)."""
+    """Comando /faltas_top: top 10 de docentes con más clases programadas sin firmar.
+
+    Returns:
+        Texto HTML con faltas, clases programadas y porcentaje por docente.
+    """
     try:
         conn = get_db()
         with conn.cursor() as cur:
@@ -13116,7 +15645,14 @@ def _cmd_faltas_top() -> str:
 # ─── COMANDOS DE ACCIÓN (BLOQUE 1) ────────────────────────────────────────
 
 def _cmd_pin_temp(arg: str) -> tuple:
-    """Genera un PIN temporal para un aula+turno por 30 minutos."""
+    """Comando /pin_temp: genera un PIN temporal de 4 dígitos para un aula y turno del día.
+
+    Args:
+        arg: Aula y turno (TM o TT) separados por espacio.
+
+    Returns:
+        Tupla (texto HTML con el PIN, None). Sobrescribe el PIN automático de hoy y deja registro de auditoría.
+    """
     partes = arg.strip().upper().split()
     if len(partes) < 2:
         return ("❓ Uso: <code>/pin_temp AULA TURNO</code>\n   Ej: <code>/pin_temp 25 TM</code>", None)
@@ -13124,6 +15660,7 @@ def _cmd_pin_temp(arg: str) -> tuple:
     if turno not in ('TM', 'TT'):
         return ("⚠️ Turno inválido. Usá TM o TT.", None)
     # Genera PIN de 4 dígitos aleatorio
+    # secrets en lugar de random: el PIN es una credencial y debe ser impredecible
     pin = str(secrets.randbelow(10000)).zfill(4)
     hoy = date.today().isoformat()
     try:
@@ -13154,7 +15691,14 @@ def _cmd_pin_temp(arg: str) -> tuple:
 
 
 def _cmd_mantenimiento(arg: str) -> tuple:
-    """Activa o desactiva el modo mantenimiento."""
+    """Comando /mantenimiento: activa, desactiva o consulta el modo mantenimiento.
+
+    Args:
+        arg: on, off, activar o desactivar. Vacío muestra el estado con botones de confirmación.
+
+    Returns:
+        Tupla (texto HTML, botones o None).
+    """
     accion = arg.strip().lower()
     if accion not in ('on', 'off', 'activar', 'desactivar'):
         # Si no se pasa argumento, mostramos estado actual con botones
@@ -13179,7 +15723,14 @@ def _cmd_mantenimiento(arg: str) -> tuple:
 
 
 def _aplicar_mantenimiento(valor: str) -> str:
-    """Aplica el cambio de modo mantenimiento."""
+    """Persiste el valor del modo mantenimiento en config_sistema y registra auditoría.
+
+    Args:
+        valor: Cadena 1 para activar o 0 para desactivar.
+
+    Returns:
+        Texto HTML con el resultado de la operación.
+    """
     try:
         conn = get_db()
         with conn.cursor() as cur:
@@ -13209,7 +15760,11 @@ def _aplicar_mantenimiento(valor: str) -> str:
 
 
 def _cmd_backup_ahora() -> tuple:
-    """Genera un backup manual del sistema y lo notifica."""
+    """Comando /backup_ahora: genera un backup manual del sistema.
+
+    Returns:
+        Tupla (texto HTML con nombre y tamaño del archivo, None).
+    """
     try:
         path = _generar_backup_archivo()
         nombre = os.path.basename(path) if path else 'backup.json'
@@ -13232,7 +15787,14 @@ def _cmd_backup_ahora() -> tuple:
 
 
 def _cmd_reset_doc(arg: str) -> tuple:
-    """Resetea la contraseña de un docente. Pide confirmación con botones."""
+    """Comando /reset_doc: pide confirmación para resetear la contraseña de un docente.
+
+    Args:
+        arg: Email del docente.
+
+    Returns:
+        Tupla (texto HTML, botones Confirmar y Cancelar con callback reset_doc_ok:<email>).
+    """
     email = arg.strip().lower()
     if '@' not in email:
         return ("❓ Uso: <code>/reset_doc EMAIL</code>\n   Ej: <code>/reset_doc jlopez@gna.gob.ar</code>", None)
@@ -13263,9 +15825,17 @@ def _cmd_reset_doc(arg: str) -> tuple:
 
 
 def _aplicar_reset_doc(email: str) -> str:
-    """Ejecuta el reset de password del docente."""
+    """Resetea la contraseña de un docente a una clave temporal aleatoria.
+
+    Args:
+        email: Email del docente.
+
+    Returns:
+        Texto HTML con la nueva clave temporal, o aviso si el docente no existe.
+    """
     try:
         # Generamos password temporal legible: Sipa-XXXX
+        # Clave temporal aleatoria con secrets; se guarda solo su hash
         nueva = f"Sipa-{secrets.token_hex(3)}"
         conn = get_db()
         with conn.cursor() as cur:
@@ -13292,7 +15862,14 @@ def _aplicar_reset_doc(email: str) -> str:
 
 
 def _cmd_aula(arg: str) -> str:
-    """Info del aula indicada. Acepta '25' o '25 TM'."""
+    """Comando /aula: muestra las últimas minutas de un aula.
+
+    Args:
+        arg: Número de aula y turno opcional (TM o TT).
+
+    Returns:
+        Texto HTML con la última minuta del turno indicado o las dos últimas minutas del aula.
+    """
     partes = arg.strip().upper().split()
     if not partes:
         return "❓ Uso: <code>/aula NUMERO</code>  (ej: <code>/aula 25</code>)"
@@ -13331,7 +15908,11 @@ def _cmd_aula(arg: str) -> str:
 
 
 def _cmd_ausentes() -> str:
-    """Ausentes de hoy (de todas las aulas)."""
+    """Comando /ausentes: lista los ausentes de hoy en todas las aulas.
+
+    Returns:
+        Texto HTML con ausentes por aula (máx. 20 por aula), su causa y el total.
+    """
     try:
         conn = get_db()
         with conn.cursor() as cur:
@@ -13368,7 +15949,14 @@ def _cmd_ausentes() -> str:
 
 
 def _cmd_foja(arg: str) -> str:
-    """Foja de asistencia de un docente (últimas 10 firmas)."""
+    """Comando /foja: muestra las últimas 10 firmas de un docente.
+
+    Args:
+        arg: Apellido (búsqueda parcial, sin distinguir mayúsculas).
+
+    Returns:
+        Texto HTML con fecha, turno, aula y hora de cada firma.
+    """
     apellido = arg.strip().upper()
     if not apellido:
         return "❓ Uso: <code>/foja APELLIDO</code>  (ej: <code>/foja LOPEZ</code>)"
@@ -13396,7 +15984,11 @@ def _cmd_foja(arg: str) -> str:
 
 
 def _cmd_pins() -> str:
-    """PINs operativos del día — TODOS (generados dinámicamente + overrides manuales)."""
+    """Comando /pins: lista los PINs operativos del día de todas las aulas.
+
+    Returns:
+        Texto HTML agrupado por turno, marcando con una llave los PINs sobrescritos manualmente y su motivo.
+    """
     try:
         conn = get_db()
         with conn.cursor() as cur:
@@ -13461,7 +16053,11 @@ def _cmd_pins() -> str:
 
 
 def _cmd_justif() -> str:
-    """Justificaciones pendientes de aprobación."""
+    """Comando /justif: lista las justificaciones de ausencia pendientes de aprobación.
+
+    Returns:
+        Texto HTML con las 10 más recientes y el total pendiente.
+    """
     try:
         conn = get_db()
         with conn.cursor() as cur:
@@ -13491,7 +16087,15 @@ def _cmd_justif() -> str:
 
 
 def _ejecutar_comando(cmd: str, arg: str) -> tuple:
-    """Mapea cmd → (texto, botones). botones puede ser None."""
+    """Despacha un comando del bot al handler correspondiente.
+
+    Args:
+        cmd: Comando en minúsculas, por ejemplo /hoy.
+        arg: Argumentos del comando, puede ser vacío.
+
+    Returns:
+        Tupla (texto, botones). Ambos son None si el comando no existe.
+    """
     HANDLERS_SIN_ARG = {
         '/start':      _cmd_ayuda,
         '/help':       _cmd_ayuda,
@@ -13569,7 +16173,15 @@ def _ejecutar_comando(cmd: str, arg: str) -> tuple:
 
 
 def _procesar_mensaje_bot(upd: dict, cfg: dict[str, str | bool]) -> None:  # type: ignore[override]
-    """Despacha un mensaje o callback recibido al handler de comando."""
+    """Procesa una actualización de Telegram: callbacks de botones o mensajes con comandos.
+
+    Args:
+        upd: Actualización recibida de la API de Telegram.
+        cfg: Configuración del bot con token y chat_id del grupo oficial.
+
+    Returns:
+        None. Responde por Telegram y registra el comando en el log.
+    """
     token: str   = str(cfg['token'])
     chat_id: str = str(cfg['chat_id'])
 
@@ -13578,6 +16190,7 @@ def _procesar_mensaje_bot(upd: dict, cfg: dict[str, str | bool]) -> None:  # typ
     if cb:
         msg = cb.get('message') or {}
         chat_id_msg = str((msg.get('chat') or {}).get('id', ''))
+        # Se ignoran los botones de chats ajenos al grupo oficial para que nadie externo ejecute acciones
         if chat_id_msg != chat_id:
             return
         data = (cb.get('data') or '').strip()
@@ -13737,7 +16350,13 @@ def _procesar_mensaje_bot(upd: dict, cfg: dict[str, str | bool]) -> None:  # typ
 
 
 def _telegram_bot_loop():
-    """Loop infinito de polling del bot. Corre en thread daemon."""
+    """Bucle de polling del bot de Telegram; se ejecuta en un thread daemon.
+
+    Espera mientras Telegram no esté configurado o el modo interactivo esté desactivado, y procesa las actualizaciones avanzando el offset global.
+
+    Returns:
+        None.
+    """
     global _BOT_OFFSET
     print(f"[telegram-bot] Loop arrancado en PID {os.getpid()}")
     while _BOT_LOOP_RUNNING:
@@ -13753,6 +16372,7 @@ def _telegram_bot_loop():
             updates = _telegram_get_updates(cfg['token'], offset=_BOT_OFFSET, timeout=25)
             for upd in updates:
                 uid = upd.get('update_id', 0)
+                # Avanzar el offset antes de procesar evita reprocesar la misma actualización si el handler falla
                 _BOT_OFFSET = max(_BOT_OFFSET, uid + 1)
                 _procesar_mensaje_bot(upd, cfg)
         except Exception as e:
@@ -13761,7 +16381,11 @@ def _telegram_bot_loop():
 
 
 def _iniciar_telegram_bot():
-    """Arranca el thread del bot interactivo. Idempotente."""
+    """Arranca el thread del bot interactivo de Telegram. Es idempotente.
+
+    Returns:
+        None.
+    """
     global _BOT_LOOP_RUNNING, _BOT_LOOP_THREAD
     if _BOT_LOOP_RUNNING:
         return
@@ -13773,7 +16397,17 @@ def _iniciar_telegram_bot():
 
 @app.route('/api/su/telegram/reenviar', methods=['POST'])
 def su_telegram_reenviar():
-    """Reenvía manualmente una minuta específica al grupo (ignora el toggle activo)."""
+    """Reenvía manualmente una minuta al grupo de Telegram, ignorando el interruptor de activación.
+
+    Headers: token de Super Usuario.
+    Args (JSON del body):
+        aula: Aula de la minuta.
+        turno: Turno de la minuta.
+        fecha: Fecha de la minuta.
+
+    Returns:
+        JSON con ok y msj. Códigos: 400 si faltan datos, 403 token inválido, 404 minuta inexistente, 500 error.
+    """
     if not _su_token_valido(request):
         return jsonify({'error': 'Token SU inválido'}), 403
     d     = request.json or {}
@@ -13813,7 +16447,11 @@ def su_telegram_reenviar():
 
 
 def _cargar_params():
-    """Devuelve dict con todos los parámetros (default + override de BD)."""
+    """Carga todos los parámetros del sistema: valores por defecto con los overrides de la base.
+
+    Returns:
+        Diccionario clave a dict con valor y descripcion.
+    """
     out = {k: dict(v) for k, v in PARAMS_DEFAULT.items()}
     try:
         conn = get_db()
@@ -13833,6 +16471,13 @@ def _cargar_params():
 
 @app.route('/api/su/parametros', methods=['GET'])
 def su_get_parametros():
+    """GET /api/su/parametros: devuelve todos los parámetros del sistema.
+
+    Headers: token de Super Usuario.
+
+    Returns:
+        JSON con los parámetros, o el error de autorización.
+    """
     err = _exigir_su(request)
     if err: return err
     return jsonify(_cargar_params())
@@ -13840,7 +16485,11 @@ def su_get_parametros():
 
 @app.route('/api/parametros_publicos', methods=['GET'])
 def parametros_publicos():
-    """Versión sin token para que el frontend del docente consulte tolerancias."""
+    """GET /api/parametros_publicos: expone sin token solo los parámetros que necesita el frontend docente.
+
+    Returns:
+        JSON clave a valor con tolerancias, límite de justificación retroactiva, días de alerta y estado de adelantos de horario.
+    """
     p = _cargar_params()
     # Sólo expone los que necesita el frontend del docente
     publicos = ['tolerancia_antes_min','tolerancia_despues_min',
@@ -13851,6 +16500,13 @@ def parametros_publicos():
 
 @app.route('/api/plana_mayor/adelantos-horario', methods=['GET'])
 def plana_mayor_adelantos_horario():
+    """GET /api/plana_mayor/adelantos-horario: lista los últimos 500 adelantos de horario.
+
+    Headers: token de Plana Mayor o de Super Usuario.
+
+    Returns:
+        JSON con activo (adelantos automáticos habilitados) y casos. Códigos: 403 no autorizado, 500 error.
+    """
     if not _admin_token_valido(request) and not _su_token_valido(request):
         return jsonify({'error': 'No autorizado'}), 403
     conn = get_db()
@@ -13881,6 +16537,15 @@ def plana_mayor_adelantos_horario():
 
 @app.route('/api/su/adelantos-horario', methods=['POST'])
 def su_configurar_adelantos_horario():
+    """POST /api/su/adelantos-horario: activa o desactiva los adelantos automáticos de horario.
+
+    Headers: token de Super Usuario.
+    Args (JSON del body):
+        activo: Booleano, 0/1 o '0'/'1'.
+
+    Returns:
+        JSON con activo y msj. Códigos: 400 valor inválido, 500 error.
+    """
     err = _exigir_su(request)
     if err:
         return err
@@ -13918,12 +16583,22 @@ def su_configurar_adelantos_horario():
 
 @app.route('/api/plana_mayor/adelantos-horario/<int:adelanto_id>/revocar', methods=['POST'])
 def revocar_adelanto_horario(adelanto_id):
+    """POST /api/plana_mayor/adelantos-horario/<id>/revocar: revoca un adelanto de horario aplicado.
+
+    Headers: token de Plana Mayor o de Super Usuario.
+    Args:
+        adelanto_id: ID del adelanto (parámetro de URL).
+
+    Returns:
+        JSON con msj. Códigos: 403 no autorizado, 409 si no existe, ya fue revocado, es de fecha pasada o ya hay minuta o firma, 500 error.
+    """
     if not _admin_token_valido(request) and not _su_token_valido(request):
         return jsonify({'error': 'No autorizado'}), 403
     usuario = _usuario_sesion_actual(request)
     conn = get_db()
     try:
         with conn.cursor() as cur:
+            # FOR UPDATE bloquea la fila para evitar revocaciones concurrentes del mismo adelanto
             cur.execute("""
                 SELECT docente, aula, turno, materia, fecha_original,
                        fecha_nueva, estado
@@ -13967,12 +16642,22 @@ def revocar_adelanto_horario(adelanto_id):
 
 @app.route('/api/su/parametros', methods=['POST'])
 def su_set_parametros():
+    """POST /api/su/parametros: actualiza parámetros del sistema con validación.
+
+    Headers: token de Super Usuario.
+    Args (JSON del body):
+        parametros: Dict clave a valor. Solo claves de PARAMS_DEFAULT; se validan latitud, longitud y radio.
+
+    Returns:
+        JSON con msj. Códigos: 400 datos inválidos, 500 error.
+    """
     err = _exigir_su(request)
     if err: return err
     d = request.json or {}
     cambios = d.get('parametros', {})
     if not isinstance(cambios, dict) or not cambios:
         return jsonify({'error': 'No se recibieron parámetros'}), 400
+    # Lista blanca de claves: impide escribir parámetros arbitrarios en config_sistema
     desconocidos = sorted(set(cambios) - set(PARAMS_DEFAULT))
     if desconocidos:
         return jsonify({'error': f'Parámetro(s) no permitido(s): {", ".join(desconocidos)}'}), 400
@@ -14003,6 +16688,7 @@ def su_set_parametros():
     try:
         with conn.cursor() as cur:
             for clave, valor in cambios.items():
+                # Defensa adicional: se descartan claves con formato inesperado
                 if not re.match(r'^[a-z_]+$', clave or ''):
                     continue
                 cur.execute("""
@@ -14024,6 +16710,13 @@ def su_set_parametros():
 # ─── PIN BLANQUEO / OVERRIDE ──────────────────────────────────────────────
 @app.route('/api/su/pines_hoy', methods=['GET'])
 def su_pines_hoy():
+    """GET /api/su/pines_hoy: lista el PIN vigente de cada aula y turno del día.
+
+    Headers: token de Super Usuario.
+
+    Returns:
+        JSON lista de objetos con aula, turno, pin, override, motivo y creado_en.
+    """
     err = _exigir_su(request)
     if err: return err
     conn = get_db()
@@ -14059,6 +16752,17 @@ def su_pines_hoy():
 
 @app.route('/api/su/pin_blanquear', methods=['POST'])
 def su_pin_blanquear():
+    """POST /api/su/pin_blanquear: reemplaza el PIN del día de un aula y turno por uno aleatorio.
+
+    Headers: token de Super Usuario.
+    Args (JSON del body):
+        aula: Aula (obligatorio).
+        turno: Turno (obligatorio).
+        motivo: Motivo opcional.
+
+    Returns:
+        JSON con msj, pin, aula y turno. Códigos: 400 faltan datos, 500 error.
+    """
     err = _exigir_su(request)
     if err: return err
     d = request.json or {}
@@ -14095,7 +16799,16 @@ def su_pin_blanquear():
 
 @app.route('/api/su/pin_restaurar', methods=['POST'])
 def su_pin_restaurar():
-    """Quita el override y vuelve al PIN calculado por hash."""
+    """POST /api/su/pin_restaurar: quita el override y vuelve al PIN calculado por hash.
+
+    Headers: token de Super Usuario.
+    Args (JSON del body):
+        aula: Aula.
+        turno: Turno.
+
+    Returns:
+        JSON con msj. Código 500 ante error.
+    """
     err = _exigir_su(request)
     if err: return err
     d = request.json or {}
@@ -14120,7 +16833,13 @@ def su_pin_restaurar():
 # ─── BACKUP ───────────────────────────────────────────────────────────────
 @app.route('/api/su/backup', methods=['GET'])
 def su_backup():
-    """Exporta el contenido de TODAS las tablas operativas como un único JSON descargable."""
+    """GET /api/su/backup: exporta todas las tablas operativas como un único JSON descargable.
+
+    Headers: token de Super Usuario.
+
+    Returns:
+        Respuesta JSON con adjunto sipa_backup_<fecha>.json que incluye meta y tablas (columnas y filas, o error por tabla).
+    """
     err = _exigir_su(request)
     if err: return err
     tablas = ['aula_catalogo', 'tipos_novedad', 'cronograma_maestro', 'aspirantes', 'docentes', 'minutas',
@@ -14170,12 +16889,12 @@ def su_backup():
 # Arrancar el scheduler SOLO en el proceso "main" de Flask para evitar dos
 # threads cuando debug=True (Werkzeug spawnea un proceso hijo con auto-reload).
 def _debe_iniciar_scheduler() -> bool:
+    """Indica si este proceso debe iniciar el scheduler y el bot.
+
+    Returns:
+        True bajo WSGI, o en desarrollo cuando es el proceso principal (con debug solo el proceso recargado de Werkzeug); False si no.
     """
-    Determina si este proceso es el que debe correr el scheduler/bot:
-      - WSGI (gunicorn/uwsgi): __name__ != '__main__' → arranca normal
-      - Dev debug=True: solo el proceso reloaded (WERKZEUG_RUN_MAIN='true') arranca
-      - Dev debug=False: el proceso __main__ arranca (no hay reloader)
-    """
+    # Con el reloader de Werkzeug existen dos procesos; solo uno debe lanzar el scheduler para no duplicar tareas
     if __name__ != '__main__':
         return True
     debug_on = os.getenv('FLASK_DEBUG', '0') == '1'

@@ -3804,6 +3804,24 @@ table {
 }
 
 /* ── Print: ocultar UI y mostrar solo contenido ── */
+/* ── Fix celular: barra superior en 2 filas (reloj debajo) y sin desborde horizontal ── */
+html { overflow-x: hidden; max-width: 100%; }
+@media (max-width: 600px) {
+    .top-bar {
+        height: auto; min-height: 52px;
+        flex-wrap: wrap; row-gap: 4px;
+        padding: 6px 10px;
+    }
+    .top-bar-izquierda { flex: 1 1 auto; min-width: 0; }
+    .top-bar-escuela { display: none; }
+    .top-bar-derecha { flex: 1 1 100%; align-items: center; min-width: 0; }
+    .top-bar-derecha-fila { width: 100%; justify-content: space-between; min-width: 0; }
+    #fecha-reloj { font-size: .72em; white-space: nowrap; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+    .hero-content, .hero-texto { max-width: 100%; min-width: 0; }
+    .hero-titulo, .hero-subtitulo { overflow-wrap: anywhere; }
+    img, svg, video, canvas { max-width: 100%; }
+}
+
 @media print {
     .top-bar, .hero-banner, .sidebar-menu, .sidebar-overlay,
     .btn-acceso-su, .btn-hamburguesa, .theme-toggle,
