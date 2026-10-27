@@ -473,7 +473,7 @@
                 <div class="sub-nav"        id="nav-firmas-tardias" onclick="mostrarPestanaAdmin('admin-firmas-tardias',this)">
                     ⏳ Firmas tardías <span id="firmas-tardias-pendientes-badge" class="badge-mini badge-mini-naranja" style="display:none;margin-left:5px;">0</span>
                 </div>
-                <div class="sub-nav" onclick="mostrarPestanaAdmin('admin-calendario',this)">📅 Días sin actividad</div>
+                <div class="sub-nav" onclick="mostrarPestanaAdmin('admin-calendario',this)">📅 Calendario y ciclo lectivo</div>
                 <div class="sub-nav" onclick="mostrarPestanaAdmin('admin-coberturas',this)">👨‍🏫 Coberturas PGNP</div>
                 <div class="sub-nav" onclick="mostrarPestanaAdmin('admin-adelantos-horario',this)">⏩ Adelantos de horario</div>
                 <div class="sub-nav"        onclick="mostrarPestanaAdmin('admin-registro',this)">📡 Monitor & Firmas</div>
@@ -524,6 +524,50 @@
             </div>
 
             <div id="admin-calendario" class="admin-section">
+                <div class="card" style="border-top:4px solid #16a34a;">
+                    <h3 class="section-title" style="color:#15803d;border-color:#bbf7d0;">🎓 Ciclo lectivo, vacaciones y mesas de examen</h3>
+                    <p style="color:var(--texto-suave);font-size:.92em;">
+                        Cargue el inicio y fin del ciclo, las vacaciones de invierno y las mesas de examen. TIC programa el período y
+                        Plana Mayor lo confirma; desde entonces esos días no generan ausentes ni cuentan para la asistencia.
+                        Los días fuera del ciclo lectivo se excluyen automáticamente.
+                    </p>
+                    <button class="btn btn-primary btn-small" onclick="cargarPeriodosLectivos()">🔄 Actualizar períodos</button>
+                    <div id="periodos-formulario" style="display:none;margin-top:12px;">
+                        <div class="grid" style="align-items:end;">
+                            <div><label for="per-tipo">Tipo</label>
+                                <select id="per-tipo" onchange="actualizarCamposPeriodo()">
+                                    <option value="ciclo">Ciclo lectivo</option>
+                                    <option value="receso_invierno">Vacaciones de invierno</option>
+                                    <option value="mesa_examen">Mesa de exámenes</option>
+                                    <option value="receso_otro">Otro receso</option>
+                                </select>
+                            </div>
+                            <div><label for="per-desde">Desde</label><input type="date" id="per-desde"></div>
+                            <div><label for="per-hasta">Hasta</label><input type="date" id="per-hasta"></div>
+                            <div id="per-alcance-wrap" style="display:none;"><label for="per-alcance">Alcance</label>
+                                <select id="per-alcance" onchange="actualizarCamposPeriodo()">
+                                    <option value="institucion">Toda la institución</option>
+                                    <option value="turno">Un turno</option>
+                                    <option value="aula">Un aula</option>
+                                </select>
+                            </div>
+                            <div id="per-turno-wrap" style="display:none;"><label for="per-turno">Turno</label>
+                                <select id="per-turno"><option value="TM">Mañana</option><option value="TT">Tarde</option></select>
+                            </div>
+                            <div id="per-aula-wrap" style="display:none;"><label for="per-aula">Aula</label><input id="per-aula" maxlength="50" placeholder="Ej.: 1° A"></div>
+                            <div><label for="per-motivo">Detalle (opcional)</label><input id="per-motivo" maxlength="200" placeholder="Ej.: Receso invernal 2026"></div>
+                            <div><button class="btn btn-primary" onclick="crearPeriodoLectivo()">➕ Programar período</button></div>
+                        </div>
+                        <div style="display:flex;gap:10px;align-items:end;flex-wrap:wrap;margin-top:14px;">
+                            <div><label for="per-anio-feriados">Feriados nacionales del año</label><input type="number" id="per-anio-feriados" min="2020" max="2100" style="max-width:120px;"></div>
+                            <button class="btn btn-primary btn-small" onclick="precargarFeriadosNacionales()">📥 Precargar feriados</button>
+                        </div>
+                        <p style="font-size:.82em;color:var(--texto-suave);margin:8px 0 0;">Los feriados precargados quedan pendientes de confirmación; revise los trasladables.</p>
+                    </div>
+                    <div id="periodos-lista" style="margin-top:18px;">
+                        <div class="empty-state"><span class="empty-state-icon">⏳</span><span class="empty-state-text">Cargando períodos…</span></div>
+                    </div>
+                </div>
                 <div class="card" style="border-top:4px solid #0ea5e9;">
                     <h3 class="section-title" style="color:#0369a1;border-color:#bae6fd;">📅 Feriados y días sin actividad</h3>
                     <p style="color:var(--texto-suave);font-size:.92em;">
@@ -2031,10 +2075,10 @@ ayuda - ❔ Manual completo</pre>
     <div class="developer-footer-location"><span aria-hidden="true">&lt;/&gt; with</span> <span class="developer-footer-heart" aria-label="amor">♥</span> <span>en Argentina</span></div>
 </footer>
 
-<script src="{{ url_for('static', filename='js/main.js') }}?v=5.15"></script>
+<script src="{{ url_for('static', filename='js/main.js') }}?v=5.16"></script>
 <script src="{{ url_for('static', filename='js/bedelia.js') }}?v=5.9"></script>
 <script src="{{ url_for('static', filename='js/docente.js') }}?v=5.7"></script>
-<script src="{{ url_for('static', filename='js/admin.js') }}?v=6.29"></script>
+<script src="{{ url_for('static', filename='js/admin.js') }}?v=6.31"></script>
 
 <script>
 /* ── INICIALIZACIÓN EXTRA ── */

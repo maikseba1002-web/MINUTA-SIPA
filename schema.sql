@@ -180,6 +180,35 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_calendario_no_actividad_alcance
     ON calendario_no_actividad(fecha, alcance, (COALESCE(turno, '')), (COALESCE(aula, '')))
     WHERE estado IN ('programado', 'confirmado');
 
+CREATE TABLE IF NOT EXISTS periodos_lectivos (
+    id SERIAL PRIMARY KEY,
+    tipo VARCHAR(30) NOT NULL
+        CHECK (tipo IN ('ciclo', 'receso_invierno', 'mesa_examen', 'receso_otro')),
+    fecha_desde DATE NOT NULL,
+    fecha_hasta DATE NOT NULL,
+    alcance VARCHAR(20) NOT NULL DEFAULT 'institucion'
+        CHECK (alcance IN ('institucion', 'turno', 'aula')),
+    turno VARCHAR(20),
+    aula VARCHAR(50),
+    motivo VARCHAR(200) NOT NULL DEFAULT '',
+    estado VARCHAR(20) NOT NULL DEFAULT 'programado'
+        CHECK (estado IN ('programado', 'confirmado')),
+    excepciones JSONB NOT NULL DEFAULT '[]'::jsonb,
+    creado_por VARCHAR(150) NOT NULL,
+    creado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    confirmado_por VARCHAR(150),
+    confirmado_en TIMESTAMP,
+    actualizado TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    CHECK (fecha_hasta >= fecha_desde),
+    CHECK (
+        (alcance = 'institucion' AND turno IS NULL AND aula IS NULL) OR
+        (alcance = 'turno' AND turno IN ('TM', 'TT') AND aula IS NULL) OR
+        (alcance = 'aula' AND turno IN ('TM', 'TT') AND aula IS NOT NULL)
+    )
+);
+CREATE INDEX IF NOT EXISTS idx_periodos_lectivos_rango
+    ON periodos_lectivos(fecha_desde, fecha_hasta, estado);
+
 CREATE TABLE IF NOT EXISTS audit_log (
     id SERIAL PRIMARY KEY,
     fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

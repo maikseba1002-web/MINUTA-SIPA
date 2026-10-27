@@ -275,8 +275,84 @@ def _calendario_cubre_aula(item, aula, turno):
     )
 
 
+PERIODO_TIPOS = {
+    'ciclo': 'Ciclo lectivo',
+    'receso_invierno': 'Vacaciones de invierno',
+    'mesa_examen': 'Mesa de exámenes',
+    'receso_otro': 'Otro receso',
+}
+PERIODO_MAX_DIAS = 400
+
+
+def _a_fecha(valor):
+    """Convierte date, datetime o texto ISO en date."""
+    if isinstance(valor, datetime):
+        return valor.date()
+    if isinstance(valor, date):
+        return valor
+    return date.fromisoformat(str(valor)[:10])
+
+
+def _items_periodos(cur, desde, hasta):
+    """Expande los períodos lectivos confirmados a cierres diarios dentro de un rango.
+
+    Los recesos y mesas de examen generan un cierre por cada día del rango. El ciclo lectivo
+    genera cierres institucionales para los días fuera de todo ciclo, a partir del año del
+    primer ciclo cargado (así el historial anterior no se altera).
+
+    Args:
+        cur: Cursor psycopg2 abierto.
+        desde: Fecha inicial (inclusive).
+        hasta: Fecha final (inclusive).
+
+    Returns:
+        list[dict]: Elementos con fecha, alcance, turno, aula, excepciones y motivo.
+    """
+    d0, d1 = _a_fecha(desde), _a_fecha(hasta)
+    if d1 < d0:
+        return []
+    try:
+        cur.execute("""
+            SELECT tipo, fecha_desde, fecha_hasta, alcance, turno, aula, motivo, excepciones
+            FROM periodos_lectivos
+            WHERE estado='confirmado'
+              AND (tipo='ciclo' OR (fecha_desde <= %s AND fecha_hasta >= %s))
+        """, (d1, d0))
+        periodos = cur.fetchall()
+    except psycopg2.errors.UndefinedTable:
+        cur.connection.rollback()
+        return []
+    items = []
+    ciclos = [(p[1], p[2]) for p in periodos if p[0] == 'ciclo']
+    for tipo, p_desde, p_hasta, alcance, turno, aula, motivo, excepciones in periodos:
+        if tipo == 'ciclo':
+            continue
+        dia = max(p_desde, d0)
+        fin = min(p_hasta, d1)
+        etiqueta = f"{PERIODO_TIPOS.get(tipo, tipo)}: {motivo}" if motivo else PERIODO_TIPOS.get(tipo, tipo)
+        while dia <= fin:
+            items.append({
+                'fecha': dia.isoformat(), 'alcance': alcance, 'turno': turno,
+                'aula': aula, 'excepciones': excepciones, 'motivo': etiqueta,
+            })
+            dia += timedelta(days=1)
+    if ciclos:
+        primer_anio = min(c[0].year for c in ciclos)
+        dia = max(d0, date(primer_anio, 1, 1))
+        while dia <= d1:
+            if not any(ini <= dia <= fin for ini, fin in ciclos):
+                items.append({
+                    'fecha': dia.isoformat(), 'alcance': 'institucion', 'turno': None,
+                    'aula': None, 'excepciones': [], 'motivo': 'Fuera del ciclo lectivo',
+                })
+            dia += timedelta(days=1)
+    return items
+
+
 def _cargar_calendario_no_actividad(cur, desde, hasta):
     """Carga los cierres confirmados del calendario de no actividad en un rango de fechas.
+
+    Incluye los cierres derivados de los períodos lectivos (ciclo, recesos y mesas de examen).
 
     Args:
         cur: Cursor psycopg2 abierto.
@@ -287,17 +363,19 @@ def _cargar_calendario_no_actividad(cur, desde, hasta):
         list[dict]: Elementos con fecha (ISO), alcance, turno, aula y excepciones.
     """
     cur.execute("""
-        SELECT fecha::text, alcance, turno, aula, excepciones
+        SELECT fecha::text, alcance, turno, aula, excepciones, motivo
         FROM calendario_no_actividad
         WHERE estado='confirmado' AND fecha BETWEEN %s AND %s
     """, (desde, hasta))
-    return [{
+    items = [{
         'fecha': row[0],
         'alcance': row[1],
         'turno': row[2],
         'aula': row[3],
         'excepciones': row[4],
+        'motivo': row[5],
     } for row in cur.fetchall()]
+    return items + _items_periodos(cur, desde, hasta)
 
 
 def _sin_actividad_en_fecha(calendario, fecha, aula, turno):
@@ -337,7 +415,7 @@ def _cargar_cierres_fecha(cur, fecha):
     return [{
         'fecha': row[0], 'alcance': row[1], 'turno': row[2],
         'aula': row[3], 'excepciones': row[4], 'motivo': row[5],
-    } for row in cur.fetchall()]
+    } for row in cur.fetchall()] + _items_periodos(cur, fecha, fecha)
 
 
 def _usuario_sesion_actual(req):
@@ -659,6 +737,34 @@ def init_db():
     CREATE UNIQUE INDEX IF NOT EXISTS uq_calendario_no_actividad_alcance
         ON calendario_no_actividad(fecha, alcance, (COALESCE(turno, '')), (COALESCE(aula, '')))
         WHERE estado IN ('programado', 'confirmado');
+    CREATE TABLE IF NOT EXISTS periodos_lectivos (
+        id            SERIAL PRIMARY KEY,
+        tipo          VARCHAR(30) NOT NULL
+                      CHECK (tipo IN ('ciclo', 'receso_invierno', 'mesa_examen', 'receso_otro')),
+        fecha_desde   DATE NOT NULL,
+        fecha_hasta   DATE NOT NULL,
+        alcance       VARCHAR(20) NOT NULL DEFAULT 'institucion'
+                      CHECK (alcance IN ('institucion', 'turno', 'aula')),
+        turno         VARCHAR(20),
+        aula          VARCHAR(50),
+        motivo        VARCHAR(200) NOT NULL DEFAULT '',
+        estado        VARCHAR(20) NOT NULL DEFAULT 'programado'
+                      CHECK (estado IN ('programado', 'confirmado')),
+        excepciones   JSONB NOT NULL DEFAULT '[]'::jsonb,
+        creado_por    VARCHAR(150) NOT NULL,
+        creado_en     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        confirmado_por VARCHAR(150),
+        confirmado_en TIMESTAMP,
+        actualizado   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        CHECK (fecha_hasta >= fecha_desde),
+        CHECK (
+            (alcance = 'institucion' AND turno IS NULL AND aula IS NULL) OR
+            (alcance = 'turno' AND turno IN ('TM', 'TT') AND aula IS NULL) OR
+            (alcance = 'aula' AND turno IN ('TM', 'TT') AND aula IS NOT NULL)
+        )
+    );
+    CREATE INDEX IF NOT EXISTS idx_periodos_lectivos_rango
+        ON periodos_lectivos(fecha_desde, fecha_hasta, estado);
     CREATE TABLE IF NOT EXISTS config_sistema (
         clave        VARCHAR(60) PRIMARY KEY,
         valor        TEXT NOT NULL,
@@ -1315,11 +1421,11 @@ def verificar_pin(pin: str):
 # antes de hashear para que un dump de la BD no pueda atacarse con rainbow tables.
 SU_SALT = os.getenv("SU_SALT", "SIPA_GNA_2026_TIC_Salt_v1")
 
-# Hash del password "SU_CboCuello_TIC_2026!" — calculado offline:
-#   sha256(salt + password + salt) → hex
+# Hash SHA-256 de sal + clave + sal. Definir SU_PASSWORD_HASH (y SU_SALT) en .env
+# en producción; este valor solo permite iniciar en desarrollo.
 SU_PASSWORD_HASH = os.getenv(
     "SU_PASSWORD_HASH",
-    hashlib.sha256((SU_SALT + "SU_CboCuello_TIC_2026!" + SU_SALT).encode()).hexdigest()
+    "541d7b94976c48e71a78e99670c3a2783a328ef7e48b5d1e6d3079c7ade84ba8"
 )
 
 # Hash para la clave vigente de Plana Mayor. Los valores predeterminados permiten
@@ -3150,7 +3256,7 @@ def diagnostico():
                 # Seguridad y auditoría
                 'usuarios_admin', 'audit_log', 'failed_logins', 'system_log',
                 # Configuración
-                'config_sistema', 'calendario_no_actividad',
+                'config_sistema', 'calendario_no_actividad', 'periodos_lectivos',
         # Telegram / Bot
         'bedeles_telegram', 'bedel_link_tokens', 'recordatorios_telegram', 'bot_comando_log',
     ]
@@ -5169,6 +5275,443 @@ def gestionar_excepcion_calendario(evento_id):
                    'calendario_no_actividad', str(evento_id),
                    f'Aula {aula} ({turno}) · {motivo or "excepción quitada"}')
         return jsonify({'msj': 'Excepción actualizada.', 'excepciones': excepciones})
+    except Exception as e:
+        conn.rollback()
+        return jsonify({'error': str(e)}), 500
+    finally:
+        conn.close()
+
+
+def _validar_periodo_lectivo(d):
+    """Valida y normaliza el cuerpo de un período lectivo (ciclo, receso o mesa de exámenes).
+
+    Args:
+        d: Dict con tipo, fecha_desde, fecha_hasta (AAAA-MM-DD), alcance, turno, aula y motivo.
+
+    Returns:
+        tuple: (datos normalizados, None) si es válido, o (None, mensaje de error).
+    """
+    if not isinstance(d, dict):
+        return None, 'El cuerpo de la solicitud debe ser un objeto JSON.'
+    tipo = str(d.get('tipo') or '').strip().lower()
+    if tipo not in PERIODO_TIPOS:
+        return None, 'Tipo de período inválido.'
+    try:
+        desde = datetime.strptime(str(d.get('fecha_desde') or '').strip(), '%Y-%m-%d').date()
+        hasta = datetime.strptime(str(d.get('fecha_hasta') or '').strip(), '%Y-%m-%d').date()
+    except ValueError:
+        return None, 'Las fechas deben tener formato AAAA-MM-DD.'
+    if hasta < desde:
+        return None, 'La fecha de fin no puede ser anterior a la de inicio.'
+    if (hasta - desde).days + 1 > PERIODO_MAX_DIAS:
+        return None, f'El período no puede superar {PERIODO_MAX_DIAS} días.'
+    motivo = str(d.get('motivo') or '').strip()
+    if len(motivo) > 200:
+        return None, 'El motivo no puede superar 200 caracteres.'
+    if tipo == 'ciclo':
+        alcance, turno, aula = 'institucion', None, None
+        motivo = motivo or f'Ciclo lectivo {desde.year}'
+    else:
+        alcance = str(d.get('alcance') or 'institucion').strip().lower()
+        if alcance not in ('institucion', 'turno', 'aula'):
+            return None, 'El alcance debe ser institución, turno o aula.'
+        turno = str(d.get('turno') or '').strip().upper() or None
+        aula = str(d.get('aula') or '').strip().upper() or None
+        if alcance == 'institucion':
+            turno = aula = None
+        elif alcance == 'turno':
+            aula = None
+            if turno not in ('TM', 'TT'):
+                return None, 'Seleccione un turno válido.'
+        elif turno not in ('TM', 'TT') or not aula or len(aula) > 50:
+            return None, 'Seleccione aula y turno para el alcance por aula.'
+        motivo = motivo or PERIODO_TIPOS[tipo]
+    return {
+        'tipo': tipo, 'fecha_desde': desde.isoformat(), 'fecha_hasta': hasta.isoformat(),
+        'alcance': alcance, 'turno': turno, 'aula': aula, 'motivo': motivo,
+    }, None
+
+
+_PERIODO_COLS = (
+    "id, tipo, fecha_desde::text, fecha_hasta::text, alcance, turno, aula, motivo, "
+    "estado, excepciones, creado_por, creado_en::text, confirmado_por, confirmado_en::text"
+)
+
+
+def _periodo_a_dict(r):
+    """Convierte una fila de periodos_lectivos (según _PERIODO_COLS) en dict JSON-serializable."""
+    return {
+        'id': r[0], 'tipo': r[1], 'tipo_nombre': PERIODO_TIPOS.get(r[1], r[1]),
+        'fecha_desde': r[2], 'fecha_hasta': r[3], 'alcance': r[4], 'turno': r[5],
+        'aula': r[6], 'motivo': r[7], 'estado': r[8], 'excepciones': r[9] or [],
+        'creado_por': r[10], 'creado_en': r[11],
+        'confirmado_por': r[12], 'confirmado_en': r[13],
+    }
+
+
+def _periodo_conflicto(cur, p, excluir_id=None):
+    """Devuelve un mensaje de error si el período duplica otro o solapa un ciclo lectivo."""
+    cur.execute("""
+        SELECT 1 FROM periodos_lectivos
+        WHERE tipo=%s AND fecha_desde=%s AND fecha_hasta=%s AND alcance=%s
+          AND COALESCE(turno,'')=COALESCE(%s,'') AND COALESCE(aula,'')=COALESCE(%s,'')
+          AND id<>COALESCE(%s,0)
+    """, (p['tipo'], p['fecha_desde'], p['fecha_hasta'], p['alcance'],
+          p['turno'], p['aula'], excluir_id))
+    if cur.fetchone():
+        return 'Ya existe un período idéntico.'
+    if p['tipo'] == 'ciclo':
+        cur.execute("""
+            SELECT 1 FROM periodos_lectivos
+            WHERE tipo='ciclo' AND fecha_desde <= %s AND fecha_hasta >= %s
+              AND id<>COALESCE(%s,0)
+        """, (p['fecha_hasta'], p['fecha_desde'], excluir_id))
+        if cur.fetchone():
+            return 'El ciclo lectivo se superpone con otro ciclo ya cargado.'
+    return None
+
+
+@app.route('/api/calendario/periodos', methods=['GET', 'POST'])
+def calendario_periodos():
+    """Lista o crea períodos lectivos (ciclo, vacaciones de invierno, mesas de examen, otros recesos).
+
+    GET (Plana Mayor o SU) devuelve todos los períodos. POST (solo SU) crea uno en estado programado.
+
+    Args:
+        JSON del body (POST): tipo, fecha_desde, fecha_hasta, alcance, turno, aula, motivo.
+
+    Returns:
+        GET: lista de períodos. POST: período creado (201); 400 datos inválidos; 409 conflicto; 403 sin autorización.
+    """
+    if request.method == 'GET':
+        if not _admin_token_valido(request) and not _su_token_valido(request):
+            return jsonify({'error': 'No autorizado'}), 403
+        conn = get_db()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(f"SELECT {_PERIODO_COLS} FROM periodos_lectivos "
+                            "ORDER BY fecha_desde DESC, id DESC")
+                return jsonify([_periodo_a_dict(r) for r in cur.fetchall()])
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+        finally:
+            conn.close()
+
+    err = _exigir_su(request)
+    if err:
+        return err
+    p, error = _validar_periodo_lectivo(request.json or {})
+    if error:
+        return jsonify({'error': error}), 400
+    conn = get_db()
+    try:
+        with conn.cursor() as cur:
+            if p['alcance'] == 'aula':
+                cur.execute("SELECT 1 FROM cronograma_maestro WHERE aula=%s AND turno=%s",
+                            (p['aula'], p['turno']))
+                if not cur.fetchone():
+                    return jsonify({'error': 'El aula no existe en el cronograma del turno seleccionado.'}), 400
+            conflicto = _periodo_conflicto(cur, p)
+            if conflicto:
+                return jsonify({'error': conflicto}), 409
+            cur.execute(f"""
+                INSERT INTO periodos_lectivos
+                    (tipo, fecha_desde, fecha_hasta, alcance, turno, aula, motivo, creado_por)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+                RETURNING {_PERIODO_COLS}
+            """, (p['tipo'], p['fecha_desde'], p['fecha_hasta'], p['alcance'],
+                  p['turno'], p['aula'], p['motivo'], _usuario_sesion_actual(request)))
+            row = cur.fetchone()
+        conn.commit()
+        _log_audit(_usuario_sesion_actual(request), 'super_usuario', 'CREAR_PERIODO_LECTIVO',
+                   'periodos_lectivos', str(row[0]),
+                   f'{p["tipo"]} · {p["fecha_desde"]} a {p["fecha_hasta"]} · {p["motivo"]}')
+        return jsonify(_periodo_a_dict(row)), 201
+    except Exception as e:
+        conn.rollback()
+        return jsonify({'error': str(e)}), 500
+    finally:
+        conn.close()
+
+
+@app.route('/api/calendario/periodos/<int:periodo_id>', methods=['PUT', 'DELETE'])
+def editar_calendario_periodo(periodo_id):
+    """Edita o elimina un período lectivo aún no confirmado (solo SU).
+
+    Args:
+        periodo_id: ID del período (URL).
+        JSON del body (PUT): mismos campos que al crear.
+
+    Returns:
+        JSON con 'msj'; 404 si no existe; 409 si ya está confirmado o hay conflicto.
+    """
+    err = _exigir_su(request)
+    if err:
+        return err
+    p = None
+    if request.method == 'PUT':
+        p, error = _validar_periodo_lectivo(request.json or {})
+        if error:
+            return jsonify({'error': error}), 400
+    conn = get_db()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT estado FROM periodos_lectivos WHERE id=%s FOR UPDATE", (periodo_id,))
+            row = cur.fetchone()
+            if not row:
+                return jsonify({'error': 'Período no encontrado.'}), 404
+            if row[0] != 'programado':
+                return jsonify({'error': 'Reabra el período antes de modificarlo o eliminarlo.'}), 409
+            if request.method == 'DELETE':
+                cur.execute("DELETE FROM periodos_lectivos WHERE id=%s", (periodo_id,))
+                accion, detalle, msj = 'ELIMINAR_PERIODO_LECTIVO', '', 'Período eliminado.'
+            else:
+                if p['alcance'] == 'aula':
+                    cur.execute("SELECT 1 FROM cronograma_maestro WHERE aula=%s AND turno=%s",
+                                (p['aula'], p['turno']))
+                    if not cur.fetchone():
+                        return jsonify({'error': 'El aula no existe en el cronograma del turno seleccionado.'}), 400
+                conflicto = _periodo_conflicto(cur, p, periodo_id)
+                if conflicto:
+                    return jsonify({'error': conflicto}), 409
+                cur.execute("""
+                    UPDATE periodos_lectivos
+                    SET tipo=%s, fecha_desde=%s, fecha_hasta=%s, alcance=%s, turno=%s,
+                        aula=%s, motivo=%s, excepciones='[]'::jsonb, actualizado=CURRENT_TIMESTAMP
+                    WHERE id=%s
+                """, (p['tipo'], p['fecha_desde'], p['fecha_hasta'], p['alcance'],
+                      p['turno'], p['aula'], p['motivo'], periodo_id))
+                accion = 'ACTUALIZAR_PERIODO_LECTIVO'
+                detalle = f'{p["tipo"]} · {p["fecha_desde"]} a {p["fecha_hasta"]} · {p["motivo"]}'
+                msj = 'Período actualizado.'
+        conn.commit()
+        _log_audit(_usuario_sesion_actual(request), 'super_usuario', accion,
+                   'periodos_lectivos', str(periodo_id), detalle)
+        return jsonify({'msj': msj})
+    except Exception as e:
+        conn.rollback()
+        return jsonify({'error': str(e)}), 500
+    finally:
+        conn.close()
+
+
+@app.route('/api/calendario/periodos/<int:periodo_id>/<accion>', methods=['POST'])
+def estado_calendario_periodo(periodo_id, accion):
+    """Confirma o reabre un período lectivo (Plana Mayor o SU).
+
+    Solo los períodos confirmados afectan las faltas; al reabrir, las clases vuelven a contar.
+
+    Args:
+        periodo_id: ID del período (URL).
+        accion: 'confirmar' o 'reabrir' (URL).
+
+    Returns:
+        JSON con 'msj'; 404 acción desconocida; 409 si el estado no lo permite.
+    """
+    if accion not in ('confirmar', 'reabrir'):
+        return jsonify({'error': 'Acción desconocida.'}), 404
+    if not _admin_token_valido(request) and not _su_token_valido(request):
+        return jsonify({'error': 'No autorizado'}), 403
+    usuario = _usuario_sesion_actual(request)
+    conn = get_db()
+    try:
+        with conn.cursor() as cur:
+            if accion == 'confirmar':
+                cur.execute("""
+                    UPDATE periodos_lectivos
+                    SET estado='confirmado', confirmado_por=%s,
+                        confirmado_en=CURRENT_TIMESTAMP, actualizado=CURRENT_TIMESTAMP
+                    WHERE id=%s AND estado='programado'
+                    RETURNING tipo, fecha_desde::text, fecha_hasta::text
+                """, (usuario, periodo_id))
+            else:
+                cur.execute("""
+                    UPDATE periodos_lectivos
+                    SET estado='programado', confirmado_por=NULL, confirmado_en=NULL,
+                        actualizado=CURRENT_TIMESTAMP
+                    WHERE id=%s AND estado='confirmado'
+                    RETURNING tipo, fecha_desde::text, fecha_hasta::text
+                """, (periodo_id,))
+            row = cur.fetchone()
+            if not row:
+                return jsonify({'error': 'El período no existe o ya tiene ese estado.'}), 409
+        conn.commit()
+        _log_audit(usuario, 'plana_mayor',
+                   'CONFIRMAR_PERIODO_LECTIVO' if accion == 'confirmar' else 'REABRIR_PERIODO_LECTIVO',
+                   'periodos_lectivos', str(periodo_id), f'{row[0]} · {row[1]} a {row[2]}')
+        return jsonify({'msj': 'Período confirmado; las clases del rango no cuentan como faltas.'
+                        if accion == 'confirmar'
+                        else 'Período reabierto; las clases vuelven a contar según el cronograma.'})
+    except Exception as e:
+        conn.rollback()
+        return jsonify({'error': str(e)}), 500
+    finally:
+        conn.close()
+
+
+@app.route('/api/calendario/periodos/<int:periodo_id>/excepciones', methods=['POST'])
+def excepcion_calendario_periodo(periodo_id):
+    """Agrega o quita una excepción de aula y turno en un receso o mesa confirmada (institución o turno).
+
+    Args:
+        periodo_id: ID del período (URL).
+        JSON del body: aula, turno, motivo, accion ('agregar' o 'quitar').
+
+    Returns:
+        JSON con 'msj' y 'excepciones'; 400/404/409 según validación.
+    """
+    if not _admin_token_valido(request) and not _su_token_valido(request):
+        return jsonify({'error': 'No autorizado'}), 403
+    d = request.json or {}
+    if not isinstance(d, dict):
+        return jsonify({'error': 'El cuerpo de la solicitud debe ser un objeto JSON.'}), 400
+    aula = str(d.get('aula') or '').strip().upper()
+    turno = str(d.get('turno') or '').strip().upper()
+    motivo = str(d.get('motivo') or '').strip()
+    accion = str(d.get('accion') or 'agregar').strip().lower()
+    if not aula or len(aula) > 50 or turno not in ('TM', 'TT'):
+        return jsonify({'error': 'Seleccione aula y turno válidos.'}), 400
+    if accion not in ('agregar', 'quitar') or len(motivo) > 200:
+        return jsonify({'error': 'Datos de excepción inválidos.'}), 400
+    conn = get_db()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT tipo, alcance, turno, estado, excepciones
+                FROM periodos_lectivos WHERE id=%s FOR UPDATE
+            """, (periodo_id,))
+            row = cur.fetchone()
+            if not row:
+                return jsonify({'error': 'Período no encontrado.'}), 404
+            if row[3] != 'confirmado':
+                return jsonify({'error': 'Confirme el período antes de administrar excepciones.'}), 409
+            if row[0] == 'ciclo' or row[1] == 'aula':
+                return jsonify({'error': 'Las excepciones se configuran en recesos o mesas por institución o turno.'}), 400
+            if row[1] == 'turno' and row[2] != turno:
+                return jsonify({'error': 'La excepción debe pertenecer al mismo turno del período.'}), 400
+            cur.execute("SELECT 1 FROM cronograma_maestro WHERE aula=%s AND turno=%s", (aula, turno))
+            if not cur.fetchone():
+                return jsonify({'error': 'El aula no existe en el cronograma del turno seleccionado.'}), 400
+            excepciones = row[4] or []
+            if isinstance(excepciones, str):
+                excepciones = json.loads(excepciones or '[]')
+            excepciones = [
+                x for x in excepciones if not (
+                    isinstance(x, dict)
+                    and str(x.get('aula', '')).strip().upper() == aula
+                    and str(x.get('turno', '')).strip().upper() == turno
+                )
+            ]
+            if accion == 'agregar':
+                if not motivo:
+                    return jsonify({'error': 'Indique el motivo de la excepción.'}), 400
+                excepciones.append({
+                    'aula': aula, 'turno': turno, 'motivo': motivo,
+                    'autorizado_por': _usuario_sesion_actual(request),
+                    'autorizado_en': datetime.now().isoformat(timespec='seconds'),
+                })
+            cur.execute("""
+                UPDATE periodos_lectivos SET excepciones=%s::jsonb, actualizado=CURRENT_TIMESTAMP
+                WHERE id=%s
+            """, (json.dumps(excepciones), periodo_id))
+        conn.commit()
+        _log_audit(_usuario_sesion_actual(request), 'plana_mayor',
+                   'AUTORIZAR_EXCEPCION_PERIODO' if accion == 'agregar' else 'QUITAR_EXCEPCION_PERIODO',
+                   'periodos_lectivos', str(periodo_id),
+                   f'Aula {aula} ({turno}) · {motivo or "excepción quitada"}')
+        return jsonify({'msj': 'Excepción actualizada.', 'excepciones': excepciones})
+    except Exception as e:
+        conn.rollback()
+        return jsonify({'error': str(e)}), 500
+    finally:
+        conn.close()
+
+
+def _pascua(anio):
+    """Calcula el domingo de Pascua (algoritmo gregoriano de Meeus/Jones/Butcher)."""
+    a, b, c = anio % 19, anio // 100, anio % 100
+    d, e = b // 4, b % 4
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i, k = c // 4, c % 4
+    l = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * l) // 451
+    mes = (h + l - 7 * m + 114) // 31
+    dia = (h + l - 7 * m + 114) % 31 + 1
+    return date(anio, mes, dia)
+
+
+def _feriados_nacionales(anio):
+    """Genera los feriados nacionales argentinos de un año como lista de (fecha, motivo).
+
+    Los feriados trasladables se cargan en su fecha nominal y deben verificarse antes de confirmar.
+    """
+    pascua = _pascua(anio)
+    fijos = [
+        (1, 1, 'Año Nuevo'), (24, 3, 'Día de la Memoria'),
+        (2, 4, 'Día del Veterano y de los Caídos en Malvinas'),
+        (1, 5, 'Día del Trabajador'), (25, 5, 'Revolución de Mayo'),
+        (17, 6, 'Paso a la Inmortalidad de Güemes (trasladable, verificar)'),
+        (20, 6, 'Paso a la Inmortalidad de Belgrano'), (9, 7, 'Día de la Independencia'),
+        (17, 8, 'Paso a la Inmortalidad de San Martín (trasladable, verificar)'),
+        (12, 10, 'Día del Respeto a la Diversidad Cultural (trasladable, verificar)'),
+        (20, 11, 'Día de la Soberanía Nacional (trasladable, verificar)'),
+        (8, 12, 'Inmaculada Concepción de María'), (25, 12, 'Navidad'),
+    ]
+    items = [(date(anio, m, d), motivo) for d, m, motivo in fijos]
+    items += [
+        (pascua - timedelta(days=48), 'Carnaval'),
+        (pascua - timedelta(days=47), 'Carnaval'),
+        (pascua - timedelta(days=2), 'Viernes Santo'),
+    ]
+    return sorted(items)
+
+
+@app.route('/api/calendario/feriados_precargar', methods=['POST'])
+def precargar_feriados_nacionales():
+    """Precarga como 'programados' los feriados nacionales de un año (solo SU).
+
+    Los feriados ya existentes para toda la institución se omiten; Plana Mayor debe confirmarlos.
+
+    Args:
+        JSON del body: anio (entero entre 2020 y 2100).
+
+    Returns:
+        JSON con 'creados' y 'omitidos'.
+    """
+    err = _exigir_su(request)
+    if err:
+        return err
+    d = request.json or {}
+    try:
+        anio = int(d.get('anio'))
+    except (TypeError, ValueError, AttributeError):
+        return jsonify({'error': 'Indique un año válido.'}), 400
+    if not 2020 <= anio <= 2100:
+        return jsonify({'error': 'El año debe estar entre 2020 y 2100.'}), 400
+    usuario = _usuario_sesion_actual(request)
+    creados = omitidos = 0
+    conn = get_db()
+    try:
+        with conn.cursor() as cur:
+            for fecha, motivo in _feriados_nacionales(anio):
+                cur.execute("""
+                    SELECT 1 FROM calendario_no_actividad
+                    WHERE fecha=%s AND alcance='institucion'
+                """, (fecha,))
+                if cur.fetchone():
+                    omitidos += 1
+                    continue
+                cur.execute("""
+                    INSERT INTO calendario_no_actividad (fecha, alcance, motivo, creado_por)
+                    VALUES (%s,'institucion',%s,%s)
+                """, (fecha, motivo, usuario))
+                creados += 1
+        conn.commit()
+        _log_audit(usuario, 'super_usuario', 'PRECARGAR_FERIADOS', 'calendario_no_actividad',
+                   str(anio), f'creados={creados} omitidos={omitidos}')
+        return jsonify({'creados': creados, 'omitidos': omitidos})
     except Exception as e:
         conn.rollback()
         return jsonify({'error': str(e)}), 500

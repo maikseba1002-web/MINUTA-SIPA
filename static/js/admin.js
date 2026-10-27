@@ -1071,7 +1071,7 @@ async function verificarConexionBD() {
                 '📚 Datos académicos': ['cronograma_maestro','cronograma_versiones','aspirantes','docentes','aula_catalogo','aulas_catalogo_bajas','coberturas_docente'],
                 '📋 Operatividad diaria': ['minutas','firmas_docentes','justificaciones_ausencia','pin_overrides','adelantos_horario'],
                 '🔒 Seguridad y auditoría': ['usuarios_admin','audit_log','failed_logins','system_log'],
-                '⚙️ Configuración': ['config_sistema','tipos_novedad','calendario_no_actividad'],
+                '⚙️ Configuración': ['config_sistema','tipos_novedad','calendario_no_actividad','periodos_lectivos'],
                 '🤖 Telegram / Bot': ['bedeles_telegram','bedel_link_tokens','recordatorios_telegram','bot_comando_log'],
                 '📦 Archivado': ['minutas_archivo','firmas_archivo'],
             };
@@ -3202,6 +3202,7 @@ const _SQL_TABLA_DESC = {
     bedeles_telegram: 'Bedeles vinculados a Telegram',
     bot_comando_log: 'Comandos ejecutados en el bot',
     calendario_no_actividad: 'Días sin actividad / feriados',
+    periodos_lectivos: 'Ciclo lectivo, recesos y mesas de examen',
     config_sistema: 'Configuración del sistema',
     coberturas_docente: 'Coberturas / reemplazos docentes',
     cronograma_maestro: 'Cronograma de clases vigente',
@@ -4880,7 +4881,7 @@ function _renderDiaSinActividad(item, tieneTIC, tieneSesion) {
             <button class="btn btn-primary btn-small" style="margin-top:8px;" onclick="editarDiaSinActividad(${id})">Guardar cambios</button>
         </details>` : '';
     const accionesEstado = confirmado
-        ? `<button class="btn btn-small" onclick="reabrirDiaSinActividad(${id})">↩️ Reabrir</button>`
+        ? `<button class="btn btn-primary btn-small" onclick="reabrirDiaSinActividad(${id})">↩️ Reabrir</button>`
         : `<button class="btn btn-success btn-small" onclick="confirmarDiaSinActividad(${id})">✅ Confirmar cierre</button>`;
     const accionesTIC = !confirmado && tieneTIC
         ? `<button class="btn btn-danger btn-small" onclick="eliminarDiaSinActividad(${id})">🗑️ Eliminar</button>`
@@ -4908,6 +4909,207 @@ function _renderDiaSinActividad(item, tieneTIC, tieneSesion) {
         ${excepcionesHtml}${exceptionForm}${editar}
         <div style="display:flex;gap:7px;flex-wrap:wrap;margin-top:12px;">${accionesEstado}${accionesTIC}</div>
     </article>`;
+}
+
+const _PERIODO_ICONOS = { ciclo: '🎓', receso_invierno: '❄️', mesa_examen: '📝', receso_otro: '🏖️' };
+const _PERIODO_NOMBRES = {
+    ciclo: 'Ciclo lectivo', receso_invierno: 'Vacaciones de invierno',
+    mesa_examen: 'Mesa de exámenes', receso_otro: 'Otro receso',
+};
+
+function _fechaCorta(iso) {
+    const [a, m, d] = String(iso || '').split('-');
+    return a && m && d ? `${d}/${m}/${a}` : String(iso || '');
+}
+
+function actualizarCamposPeriodo() {
+    const tipo = document.getElementById('per-tipo')?.value;
+    const alcance = document.getElementById('per-alcance')?.value;
+    const esCiclo = tipo === 'ciclo';
+    const mostrar = (id, visible) => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = visible ? '' : 'none';
+    };
+    mostrar('per-alcance-wrap', !esCiclo);
+    mostrar('per-turno-wrap', !esCiclo && alcance !== 'institucion');
+    mostrar('per-aula-wrap', !esCiclo && alcance === 'aula');
+}
+
+async function cargarPeriodosLectivos() {
+    const lista = document.getElementById('periodos-lista');
+    const formulario = document.getElementById('periodos-formulario');
+    if (!lista) return;
+    const tieneTIC = !!window.SIPA?.suToken;
+    const tieneSesion = tieneTIC || !!window.SIPA?.adminToken;
+    if (formulario) {
+        formulario.style.display = tieneTIC ? '' : 'none';
+        const anio = document.getElementById('per-anio-feriados');
+        if (anio && !anio.value) anio.value = new Date().getFullYear();
+        actualizarCamposPeriodo();
+    }
+    if (!tieneSesion) {
+        lista.innerHTML = '<div class="empty-state"><span class="empty-state-icon">🔒</span><span class="empty-state-text">Inicie sesión en Plana Mayor o TIC para consultar los períodos.</span></div>';
+        return;
+    }
+    try {
+        const response = await fetch('/api/calendario/periodos', { headers: _headersCalendario() });
+        const items = await response.json();
+        if (!response.ok) throw new Error(items.error || `HTTP ${response.status}`);
+        if (!Array.isArray(items) || !items.length) {
+            lista.innerHTML = '<div class="empty-state"><span class="empty-state-icon">📭</span><span class="empty-state-text">Aún no hay ciclo lectivo, vacaciones ni mesas cargadas.</span></div>';
+            return;
+        }
+        lista.innerHTML = `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr));gap:14px;">${
+            items.map(item => _renderPeriodoLectivo(item, tieneTIC, tieneSesion)).join('')
+        }</div>`;
+    } catch (error) {
+        lista.innerHTML = `<div class="empty-state" style="border-color:var(--peligro-cl);color:var(--peligro);"><span class="empty-state-icon">⚠️</span><span class="empty-state-text">No se pudieron cargar los períodos: ${_esc(error.message)}</span></div>`;
+        console.error('[cargarPeriodosLectivos]', error);
+    }
+}
+
+function _renderPeriodoLectivo(item, tieneTIC, tieneSesion) {
+    const id = Number(item.id);
+    const confirmado = item.estado === 'confirmado';
+    const esCiclo = item.tipo === 'ciclo';
+    const dias = Math.round((new Date(item.fecha_hasta) - new Date(item.fecha_desde)) / 86400000) + 1;
+    const alcance = esCiclo ? 'Toda la institución'
+        : item.alcance === 'institucion' ? 'Toda la institución'
+            : item.alcance === 'turno' ? `Turno ${_esc(item.turno)}`
+                : `Aula ${_esc(item.aula)} · ${_esc(item.turno)}`;
+    const estado = confirmado
+        ? '<span class="badge-mini badge-mini-verde">✅ Confirmado</span>'
+        : '<span class="badge-mini badge-mini-naranja">⏳ Pendiente</span>';
+    const efecto = esCiclo
+        ? 'Los días fuera de este ciclo no cuentan como clase.'
+        : 'Sin ausentes ni asistencia en estos días.';
+    const excepciones = Array.isArray(item.excepciones) ? item.excepciones : [];
+    const excepcionesHtml = excepciones.length
+        ? `<div style="margin-top:9px;font-size:.86em;"><strong>Excepciones autorizadas</strong><ul style="margin:4px 0 0;padding-left:20px;">${
+            excepciones.map(ex => `<li>${_esc(ex.aula)} (${_esc(ex.turno)}) — ${_esc(ex.motivo || 'Sin motivo')}
+                <button class="btn btn-danger btn-small" style="padding:2px 7px;margin-left:5px;" data-aula="${_esc(ex.aula)}" data-turno="${_esc(ex.turno)}" onclick="quitarExcepcionPeriodo(${id},this)">Quitar</button></li>`).join('')
+        }</ul></div>` : '';
+    const excepcionForm = confirmado && !esCiclo && item.alcance !== 'aula' && tieneSesion ? `
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:7px;margin-top:10px;align-items:end;">
+            <div><label>Aula con actividad</label><input id="per-ex-aula-${id}" maxlength="50" placeholder="Ej.: 1° A"></div>
+            <div><label>Turno</label><select id="per-ex-turno-${id}">${
+                item.alcance === 'turno'
+                    ? `<option value="${_esc(item.turno)}">${item.turno === 'TM' ? 'Mañana' : 'Tarde'}</option>`
+                    : '<option value="TM">Mañana</option><option value="TT">Tarde</option>'
+            }</select></div>
+            <div><label>Motivo</label><input id="per-ex-motivo-${id}" maxlength="200" placeholder="Actividad autorizada"></div>
+            <button class="btn btn-primary btn-small" onclick="agregarExcepcionPeriodo(${id})">➕ Autorizar aula</button>
+        </div>` : '';
+    const editar = !confirmado && tieneTIC ? `
+        <details style="margin-top:10px;">
+            <summary style="cursor:pointer;color:var(--azul-oscuro);">Editar programación</summary>
+            <div class="grid" style="align-items:end;margin-top:8px;">
+                <div><label>Tipo</label><select id="per-ed-tipo-${id}">${
+                    Object.entries(_PERIODO_NOMBRES).map(([k, v]) => `<option value="${k}" ${item.tipo === k ? 'selected' : ''}>${v}</option>`).join('')
+                }</select></div>
+                <div><label>Desde</label><input type="date" id="per-ed-desde-${id}" value="${_esc(item.fecha_desde)}"></div>
+                <div><label>Hasta</label><input type="date" id="per-ed-hasta-${id}" value="${_esc(item.fecha_hasta)}"></div>
+                <div><label>Alcance</label><select id="per-ed-alcance-${id}">
+                    <option value="institucion" ${item.alcance === 'institucion' ? 'selected' : ''}>Institución</option>
+                    <option value="turno" ${item.alcance === 'turno' ? 'selected' : ''}>Turno</option>
+                    <option value="aula" ${item.alcance === 'aula' ? 'selected' : ''}>Aula</option>
+                </select></div>
+                <div><label>Turno</label><select id="per-ed-turno-${id}">
+                    <option value="TM" ${item.turno === 'TM' ? 'selected' : ''}>Mañana</option>
+                    <option value="TT" ${item.turno === 'TT' ? 'selected' : ''}>Tarde</option>
+                </select></div>
+                <div><label>Aula</label><input id="per-ed-aula-${id}" maxlength="50" value="${_esc(item.aula || '')}"></div>
+                <div><label>Detalle</label><input id="per-ed-motivo-${id}" maxlength="200" value="${_esc(item.motivo)}"></div>
+            </div>
+            <button class="btn btn-primary btn-small" style="margin-top:8px;" onclick="editarPeriodoLectivo(${id})">Guardar cambios</button>
+        </details>` : '';
+    const acciones = (confirmado
+        ? `<button class="btn btn-primary btn-small" onclick="cambiarEstadoPeriodo(${id},'reabrir')">↩️ Reabrir</button>`
+        : `<button class="btn btn-success btn-small" onclick="cambiarEstadoPeriodo(${id},'confirmar')">✅ Confirmar</button>`)
+        + (!confirmado && tieneTIC ? `<button class="btn btn-danger btn-small" onclick="eliminarPeriodoLectivo(${id})">🗑️ Eliminar</button>` : '');
+    return `<article class="card" style="margin:0;border:1px solid var(--borde);box-shadow:var(--sombra-xs);">
+        <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start;flex-wrap:wrap;">
+            <strong style="color:var(--azul-oscuro);">${_PERIODO_ICONOS[item.tipo] || '📅'} ${_esc(_PERIODO_NOMBRES[item.tipo] || item.tipo)}</strong>${estado}
+        </div>
+        <div style="margin-top:8px;"><strong>${_fechaCorta(item.fecha_desde)} → ${_fechaCorta(item.fecha_hasta)}</strong> · ${dias} día${dias === 1 ? '' : 's'}</div>
+        <div style="margin-top:4px;">${alcance}${item.motivo ? ` · ${_esc(item.motivo)}` : ''}</div>
+        <div style="margin-top:4px;font-size:.84em;color:var(--texto-suave);">${efecto}<br>
+            Programado por ${_esc(item.creado_por || 'TIC')}${item.confirmado_por ? ` · Confirmado por ${_esc(item.confirmado_por)}` : ''}</div>
+        ${excepcionesHtml}${excepcionForm}${editar}
+        <div style="display:flex;gap:7px;flex-wrap:wrap;margin-top:12px;">${acciones}</div>
+    </article>`;
+}
+
+async function _accionPeriodo(url, method, body, mensaje) {
+    try {
+        await _enviarAccionCalendario(url, method, body, mensaje, cargarPeriodosLectivos);
+    } catch (error) {
+        mostrarToast(error.message, 'error');
+    }
+}
+
+async function crearPeriodoLectivo() {
+    const payload = {
+        tipo: document.getElementById('per-tipo').value,
+        fecha_desde: document.getElementById('per-desde').value,
+        fecha_hasta: document.getElementById('per-hasta').value,
+        alcance: document.getElementById('per-alcance').value,
+        turno: document.getElementById('per-turno').value,
+        aula: document.getElementById('per-aula').value.trim(),
+        motivo: document.getElementById('per-motivo').value.trim(),
+    };
+    await _accionPeriodo('/api/calendario/periodos', 'POST', payload, 'Período programado.');
+}
+
+async function editarPeriodoLectivo(id) {
+    const v = campo => document.getElementById(`per-ed-${campo}-${id}`).value;
+    await _accionPeriodo(`/api/calendario/periodos/${id}`, 'PUT', {
+        tipo: v('tipo'), fecha_desde: v('desde'), fecha_hasta: v('hasta'),
+        alcance: v('alcance'), turno: v('turno'), aula: v('aula').trim(), motivo: v('motivo').trim(),
+    }, 'Período actualizado.');
+}
+
+async function eliminarPeriodoLectivo(id) {
+    if (!confirm('¿Eliminar este período programado?')) return;
+    await _accionPeriodo(`/api/calendario/periodos/${id}`, 'DELETE', undefined, 'Período eliminado.');
+}
+
+async function cambiarEstadoPeriodo(id, accion) {
+    if (accion === 'confirmar' && !confirm('Al confirmar, las clases del rango dejarán de contar como faltas. ¿Continuar?')) return;
+    await _accionPeriodo(`/api/calendario/periodos/${id}/${accion}`, 'POST', undefined,
+        accion === 'confirmar' ? 'Período confirmado.' : 'Período reabierto.');
+}
+
+async function agregarExcepcionPeriodo(id) {
+    await _accionPeriodo(`/api/calendario/periodos/${id}/excepciones`, 'POST', {
+        accion: 'agregar',
+        aula: document.getElementById(`per-ex-aula-${id}`).value.trim(),
+        turno: document.getElementById(`per-ex-turno-${id}`).value,
+        motivo: document.getElementById(`per-ex-motivo-${id}`).value.trim(),
+    }, 'Excepción autorizada.');
+}
+
+async function quitarExcepcionPeriodo(id, boton) {
+    await _accionPeriodo(`/api/calendario/periodos/${id}/excepciones`, 'POST', {
+        accion: 'quitar', aula: boton.dataset.aula, turno: boton.dataset.turno,
+    }, 'Excepción quitada.');
+}
+
+async function precargarFeriadosNacionales() {
+    const anio = Number(document.getElementById('per-anio-feriados').value);
+    try {
+        const response = await fetch('/api/calendario/feriados_precargar', {
+            method: 'POST',
+            headers: _headersCalendario(true),
+            body: JSON.stringify({ anio }),
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+        mostrarToast(`Feriados cargados: ${data.creados} nuevos, ${data.omitidos} ya existían. Confírmelos en la lista inferior.`, 'success');
+        await cargarCalendarioNoActividad();
+    } catch (error) {
+        mostrarToast(error.message, 'error');
+    }
 }
 
 async function _enviarAccionCalendario(url, method, body, mensaje, refrescar = cargarCalendarioNoActividad) {

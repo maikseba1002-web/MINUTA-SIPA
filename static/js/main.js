@@ -487,7 +487,10 @@ function mostrarPestanaAdmin(id, el) {
     el.classList.add('active');
     if (id === 'admin-pines')    cargarPinesOperativos();
     if (id === 'admin-firmas-tardias') cargarFirmasTardiasPendientes();
-    if (id === 'admin-calendario' && typeof cargarCalendarioNoActividad === 'function') cargarCalendarioNoActividad();
+    if (id === 'admin-calendario' && typeof cargarCalendarioNoActividad === 'function') {
+        cargarCalendarioNoActividad();
+        if (typeof cargarPeriodosLectivos === 'function') cargarPeriodosLectivos();
+    }
     if (id === 'admin-coberturas' && typeof cargarCoberturasDocente === 'function') cargarCoberturasDocente();
     if (id === 'admin-adelantos-horario' && typeof cargarAdelantosHorarioAdmin === 'function') cargarAdelantosHorarioAdmin();
     if (id === 'admin-registro') {
