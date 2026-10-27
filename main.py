@@ -65,6 +65,27 @@ except ImportError:
 # CONFIGURACIÓN
 # ═══════════════════════════════════════════════════════════════════════════
 load_dotenv()
+
+
+def _fijar_zona_horaria():
+    """Fuerza la zona horaria del proceso (por defecto Argentina, UTC-3).
+
+    Evita que date.today()/datetime.now() usen la hora UTC del equipo servidor
+    y adelanten el día entre las 21:00 y las 00:00. Se puede cambiar con APP_TZ
+    (formato POSIX, p. ej. ART3).
+    """
+    os.environ['TZ'] = os.getenv('APP_TZ') or 'ART3'
+    if hasattr(_time_mod, 'tzset'):
+        _time_mod.tzset()
+    else:
+        try:
+            import ctypes
+            ctypes.CDLL('ucrtbase')._tzset()
+        except Exception as e:
+            print(f"[SIPA] No se pudo fijar la zona horaria: {e}")
+
+
+_fijar_zona_horaria()
 app = Flask(__name__)
 app.config['TEMPLATES_AUTO_RELOAD'] = True
 
